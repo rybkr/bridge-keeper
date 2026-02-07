@@ -4,6 +4,10 @@
 name: Go
 
 on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        decription: "ARM64"
   push:
     branches: [ "main" ]
   pull_request:
@@ -11,18 +15,43 @@ on:
 
 jobs:
 
-  build:
-    runs-on: self-hosted
+  setup:
+    runs-on: ${{ github.run_attempt == 1 && 'self-hosted' || 'ubuntu-latest' }}
+    timeout-minutes: 5
     steps:
-    - uses: actions/checkout@v4
+      - name: Setup Go
+        if: github.run_attempt != 1
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.20'
+      - name: Go Version
+        run: |
+          which go
+          go version
 
-    - name: Build
-      run: go build -v ./...
+      - name: SSH Checkout
+        run: |
+          mkdir -p ~/.ssh
+          echo "{{ secrets.WF_SSH_PRIV_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.id_rsa
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          git clone git@github.com:rybkr/bridge-keeper.git
 
-    - name: Test
-      run: go test -v ./...
+  build:
+    runs-on: ${{ github.run_attempt == 1 && 'self-hosted' || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - name: Check Format
+        run: |
+          CHANGED_FILES=$(git diff --name-only --diff-filter=ACM ${{ github.event.before }} ${{ github.sha }} | grep '\.go$' || true
+          if [ -n "$CHANGED_FILES" ]; then
+            echo "Running go fmt -n on changed files:"
+            echo "$CHANGED_FILES"
+            echo "$CHANGED_FILES" | xargs go fmt -n
+          else
+            echo "No Go files changed"
+          fi
+
+      - name: Build
+        run: go build -v main.go
