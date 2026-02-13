@@ -38,7 +38,7 @@ jobs:
     steps:
       - name: Check Format
         run: |
-          CHANGED_FILES=$(git diff --name-only --diff-filter=ACM ${{ github.event.before }} ${{ github.sha }} | grep '\.go$' || true
+          CHANGED_FILES=$(git diff --name-only --diff-filter=ACM ${{ github.event.before }} ${{ github.sha }}) | grep '\.go$' || true
           if [ -n "$CHANGED_FILES" ]; then
             echo "Running go fmt -n on changed files:"
             echo "$CHANGED_FILES"
