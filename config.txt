@@ -1,0 +1,3 @@
+go get google.golang.org/genai
+go get github.com/joho/godotenv
+go get github.com/langwatch/langwatch/sdk-go github.com/openai/openai-go
