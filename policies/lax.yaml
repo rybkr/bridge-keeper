@@ -1,0 +1,47 @@
+version: "1"
+default: deny
+capabilities:
+  - name: read-files
+    tool: fs
+    actions: [read_file, list_dir]
+    decision: allow
+
+  - name: write-files
+    tool: fs
+    actions: [write_file]
+    decision: ask
+    constraints:
+      paths:
+        deny: ["/etc/**", "/usr/**", "/sys/**"]
+
+  - name: safe-shell
+    tool: shell
+    actions: [exec]
+    decision: allow
+    constraints:
+      commands:
+        allow: ["echo *", "cat *", "ls *", "grep *", "wc *", "head *", "tail *"]
+        deny: ["rm *", "sudo *", "chmod *", "chown *", "mkfs *", "dd *"]
+
+  - name: git-read
+    tool: git
+    actions: [status, log, diff, show, branch]
+    decision: allow
+
+  - name: http-fetch
+    tool: http
+    actions: [get]
+    decision: allow
+    constraints:
+      domains:
+        deny: ["*.internal.corp", "localhost", "127.0.0.1"]
+
+  - name: http-post
+    tool: http
+    actions: [post]
+    decision: ask
+
+  - name: pkg-ops
+    tool: pkg
+    actions: [list, install]
+    decision: ask
