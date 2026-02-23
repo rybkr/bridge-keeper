@@ -30,11 +30,23 @@ func NewGeminiAgent(client *genai.Client) *GeminiAgent {
 // Accepts user input and feeds it to the selected model.
 func (agent *GeminiAgent) GenerateResponse(ctx context.Context, prompt string) (string, error) {
 	// Simple text-based generation. For chat history, we would need to maintain a history buffer.
+	// Define the generation configuration
+	config := &genai.GenerateContentConfig{
+		// 1. System Instruction: The strongest way to enforce a concise style
+		SystemInstruction: &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{Text: "You are a highly efficient assistant. Always provide extremely concise, direct, and brief answers. Omit unnecessary pleasantries, filler words, or long explanations unless explicitly asked."},
+			},
+		},
+		Temperature: genai.Ptr[float32](1.0),
+	}
+
 	resp, err := agent.client.Models.GenerateContent(
 		ctx,
 		agent.currentModel,
 		genai.Text(prompt),
-		nil,
+		config,
 	)
 	if err != nil {
 		return "", err
