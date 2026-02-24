@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"iter"
 	"log"
 	"os"
 	"strings"
@@ -28,7 +29,7 @@ func NewGeminiAgent(client *genai.Client) *GeminiAgent {
 
 // Endpoint 1: GenerateResponse (Chat)
 // Accepts user input and feeds it to the selected model.
-func (agent *GeminiAgent) GenerateResponse(ctx context.Context, prompt string) (string, error) {
+func (agent *GeminiAgent) GenerateStream(ctx context.Context, prompt string) iter.Seq2[*genai.GenerateContentResponse, error] {
 	// Simple text-based generation. For chat history, we would need to maintain a history buffer.
 	// Define the generation configuration
 	config := &genai.GenerateContentConfig{
@@ -42,17 +43,17 @@ func (agent *GeminiAgent) GenerateResponse(ctx context.Context, prompt string) (
 		Temperature: genai.Ptr[float32](1.0),
 	}
 
-	resp, err := agent.client.Models.GenerateContent(
+	resp := agent.client.Models.GenerateContentStream(
 		ctx,
 		agent.currentModel,
 		genai.Text(prompt),
 		config,
 	)
-	if err != nil {
+	/*if err != nil {
 		return "", err
-	}
+	}*/
 
-	return resp.Text(), nil
+	return resp
 }
 
 // Endpoint 2: ListModels
@@ -176,13 +177,23 @@ func main() {
 		} else {
 			// Call Endpoint 1 & 4 (Process Input -> Output)
 			fmt.Printf("Thinking (%s)...\n", agent.currentModel)
-			response, err := agent.GenerateResponse(ctx, input)
-			if err != nil {
-				log.Printf("Error generating response: %v\n", err)
-			} else {
-				fmt.Println("Response:")
-				fmt.Println(response)
+			responses := agent.GenerateStream(ctx, input)
+			/*if err != nil {
+				log.Printf("Error generating stream: %v\n", err)
+				continue
+			}*/
+
+			fmt.Print("(Gemini) - ")
+			for chunk, err := range responses {
+				if err != nil {
+					log.Printf("\nError reading stream: %v\n", err)
+					break
+				}
+
+				// Print each chunk directly to the console without a newline
+				fmt.Print(chunk.Text())
 			}
+			fmt.Println()
 		}
 	}
 }
