@@ -6,6 +6,9 @@ import (
 	"iter"
 	"log"
 	"math/rand/v2"
+	"strings"
+
+	"bridgekeeper/internal/tools"
 
 	"google.golang.org/genai"
 )
@@ -41,6 +44,7 @@ func printGeminiCommands(agent *GeminiAgent) {
 	fmt.Println("  /help          - Show this help message")
 	fmt.Println("  /list          - List available models")
 	fmt.Println("  /model <name>  - Select a model (e.g., /model gemini-1.5-pro)")
+	fmt.Println("  /git           - Git Agent Mode (Execute repository commands)")
 	fmt.Println("  /concise       - Toggle the verboseness of the Model")
 	fmt.Println("  <your prompt>  - Chat with the AI")
 	fmt.Println("  /exit          - Quit")
@@ -157,4 +161,107 @@ func getModelResponse(agent *GeminiAgent, ctx context.Context, input string, con
 		fmt.Print(chunk.Text())
 	}
 	fmt.Println()
+}
+
+func gitEndPoint(agent *GeminiAgent, ctx context.Context, prompt string, defaultRepoPath string) {
+	// Trigger the Git Agent Mode
+	gitInput := strings.TrimSpace(prompt)
+
+	// Assuming the target repository is the current directory
+	if defaultRepoPath == "" {
+		defaultRepoPath = "./"
+	}
+	response, err := agent.AnalyzeWithGit(ctx, gitInput, defaultRepoPath)
+	if err != nil {
+		log.Printf("Error analyzing repository: %v\n", err)
+	} else {
+		fmt.Println("\n(Gemini) - " + response)
+	}
+}
+
+// Endpoint: AnalyzeWithGit
+// Enables function calling specifically for Git operations
+func (agent *GeminiAgent) AnalyzeWithGit(ctx context.Context, prompt string, defaultRepoPath string) (string, error) {
+	gitTool := &genai.Tool{
+		FunctionDeclarations: []*genai.FunctionDeclaration{
+			{
+				Name:        "execute_git_command",
+				Description: "Executes a git command in a local repository. Only provide the arguments, not the 'git' binary itself.",
+				Parameters: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"args": {
+							Type:        genai.TypeArray,
+							Description: "A list of strings representing the git arguments (e.g., ['log', '-n', '3']).",
+							Items: &genai.Schema{
+								Type: genai.TypeString,
+							},
+						},
+					},
+					Required: []string{"args"},
+				},
+			},
+		},
+	}
+
+	config := &genai.GenerateContentConfig{
+		Tools: []*genai.Tool{gitTool},
+	}
+
+	// Initialize the chat session
+	chat, err := agent.client.Chats.Create(ctx, agent.currentModel, config, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create chat session: %w", err)
+	}
+
+	// Send the user's prompt
+	resp, err := chat.SendMessage(ctx, genai.Part{Text: prompt})
+	if err != nil {
+		return "", err
+	}
+
+	// Check if the model decided to call our function
+	if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
+		part := resp.Candidates[0].Content.Parts[0]
+
+		// Check if this part is a function call
+		if part.FunctionCall != nil && part.FunctionCall.Name == "execute_git_command" {
+			funcCall := part.FunctionCall
+
+			// Extract arguments safely
+			argsAny, exists := funcCall.Args["args"].([]any)
+			if !exists {
+				return "", fmt.Errorf("model failed to provide git arguments")
+			}
+
+			var gitArgs []string
+			for _, arg := range argsAny {
+				if strArg, ok := arg.(string); ok {
+					gitArgs = append(gitArgs, strArg)
+				}
+			}
+
+			// Execute the local Git command
+			gitOutput := tools.ExecuteGitCommand(defaultRepoPath, gitArgs)
+
+			// Package terminal output back to the model
+			funcResponse := genai.FunctionResponse{
+				Name: funcCall.Name,
+				Response: map[string]any{
+					"terminal_output": gitOutput,
+				},
+			}
+
+			fmt.Printf("Handing terminal output back to %s for analysis...\n", agent.currentModel)
+			finalResp, err := chat.SendMessage(ctx, genai.Part{FunctionResponse: &funcResponse})
+			if err != nil {
+				return "", err
+			}
+
+			return finalResp.Text(), nil
+		}
+	}
+
+	// Return standard text response if no function was called
+	return resp.Text(), nil
 }

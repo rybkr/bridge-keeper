@@ -73,6 +73,15 @@ func runGeminiModel() {
 			case "/help":
 				printGeminiCommands(agent)
 
+			case "/git":
+				// Trigger the Git Agent Mode
+				fmt.Println("Git Agent Mode: ON (Target: ./)")
+				fmt.Print("Ask a question about the repository: ")
+
+				gitInput, _ := reader.ReadString('\n')
+
+				gitEndPoint(agent, ctx, gitInput, "./")
+
 			default:
 				fmt.Println("Unknown command. Try /help to list commands.")
 			}
