@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"iter"
 	"log"
 	"math/rand/v2"
+	"os"
 	"strings"
 
 	"bridgekeeper/internal/tools"
@@ -17,6 +17,8 @@ import (
 type GeminiAgent struct {
 	client       *genai.Client
 	currentModel string
+	chatSession  *genai.Chat // Tracks the persistent conversation
+	isConcise    bool        // Tracks configuration state
 }
 
 // createDefaultGeminiAgent initializes the agent with a default model.
@@ -29,7 +31,6 @@ func createDefaultGeminiAgent(ctx context.Context, apiKey string) *GeminiAgent {
 		log.Fatal(err)
 	}
 
-	// 3. Initialize our Agent API
 	agent := GeminiAgent{
 		client:       client,
 		currentModel: "gemini-2.5-flash-lite",
@@ -44,53 +45,153 @@ func printGeminiCommands(agent *GeminiAgent) {
 	fmt.Println("  /help          - Show this help message")
 	fmt.Println("  /list          - List available models")
 	fmt.Println("  /model <name>  - Select a model (e.g., /model gemini-1.5-pro)")
-	fmt.Println("  /git           - Git Agent Mode (Execute repository commands)")
 	fmt.Println("  /concise       - Toggle the verboseness of the Model")
-	fmt.Println("  <your prompt>  - Chat with the AI")
+	fmt.Println("  <your prompt>  - Chat with the AI (Auto-Tools Enabled)")
 	fmt.Println("  /exit          - Quit")
 	fmt.Println("-------------------------------")
 }
 
-// Endpoint 1: GenerateResponse (Chat)
-// Accepts user input and feeds it to the selected model.
-func (agent *GeminiAgent) GenerateStream(ctx context.Context, prompt string, toggle bool) iter.Seq2[*genai.GenerateContentResponse, error] {
-	var config *genai.GenerateContentConfig
+// getChatConfig centralizes the tool registry and system instructions.
+func (agent *GeminiAgent) getChatConfig(conciseMode bool) *genai.GenerateContentConfig {
 
-	if toggle {
-		config = &genai.GenerateContentConfig{
-			// 1. System Instruction: The strongest way to enforce a concise style
-			SystemInstruction: &genai.Content{
-				Role: "model",
-				Parts: []*genai.Part{
-					{Text: "You are a highly efficient assistant. Always provide extremely concise, direct, and brief answers. Omit unnecessary pleasantries, filler words, or long explanations unless explicitly asked."},
+	// Define the Tool Registry
+	ToolBox := &genai.Tool{
+		FunctionDeclarations: []*genai.FunctionDeclaration{
+			{
+				Name:        "execute_git_command",
+				Description: "Executes a git command in a local repository. Use this to check status, view logs, examine diffs, etc. Only provide the arguments, not the 'git' binary itself.",
+				Parameters: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"args": {
+							Type:        genai.TypeArray,
+							Description: "A list of strings representing the git arguments (e.g., ['log', '-n', '3']).",
+							Items: &genai.Schema{
+								Type: genai.TypeString,
+							},
+						},
+					},
+					Required: []string{"args"},
 				},
 			},
-			Temperature: genai.Ptr(rand.Float32() * 0.5), // Lower temperature for more deterministic and concise responses
+		},
+	}
+
+	config := &genai.GenerateContentConfig{
+		Tools: []*genai.Tool{ToolBox},
+	}
+
+	// Apply stylistic instructions based on the concise toggle
+	if conciseMode {
+		config.SystemInstruction = &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{Text: "You are a highly efficient assistant. Always provide extremely concise, direct, and brief answers. Omit unnecessary pleasantries, filler words, or long explanations unless explicitly asked."},
+			},
 		}
+		config.Temperature = genai.Ptr(rand.Float32() * 0.5)
 	} else {
-		config = &genai.GenerateContentConfig{
-			// 1. System Instruction: The strongest way to enforce a verbose style
-			SystemInstruction: &genai.Content{
-				Role: "model",
-				Parts: []*genai.Part{
-					{Text: "You are a verbose assistant. Always provide detailed, comprehensive, and thorough answers. Include all relevant information and context unless explicitly asked to be concise."},
-				},
+		config.SystemInstruction = &genai.Content{
+			Role: "model",
+			Parts: []*genai.Part{
+				{Text: "You are a verbose assistant. Always provide detailed, comprehensive, and thorough answers. Include all relevant information and context unless explicitly asked to be concise."},
 			},
-			Temperature: genai.Ptr(1.0 + rand.Float32()), // Higher temperature for more creative and verbose responses
+		}
+		config.Temperature = genai.Ptr(rand.Float32() + 1.0)
+	}
+
+	return config
+}
+
+// Endpoint: SendMessageWithTools
+// Autonomous loop that handles persistent chat and intelligent tool execution.
+func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt string, conciseMode bool) (string, error) {
+
+	// Initialize or Re-initialize the chat session if settings change
+	if agent.chatSession == nil || agent.isConcise != conciseMode {
+		config := agent.getChatConfig(conciseMode)
+		chat, err := agent.client.Chats.Create(ctx, agent.currentModel, config, nil)
+		if err != nil {
+			return "", fmt.Errorf("failed to create chat session: %w", err)
+		}
+		agent.chatSession = chat
+		agent.isConcise = conciseMode
+	}
+
+	// Send the user's prompt
+	resp, err := agent.chatSession.SendMessage(ctx, genai.Part{Text: prompt})
+	if err != nil {
+		return "", err
+	}
+
+	// Autonomous Execution Loop
+	for {
+		if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+			break
+		}
+
+		var functionResponses []genai.Part
+		hasFunctionCall := false
+
+		// 1. Scan the response parts for any function calls
+		for _, part := range resp.Candidates[0].Content.Parts {
+			if funcCall := part.FunctionCall; funcCall != nil {
+				hasFunctionCall = true
+				var responseContent string
+
+				// 2. Route the function call to the correct local tool
+				switch funcCall.Name {
+				case "execute_git_command":
+					argsAny, exists := funcCall.Args["args"].([]any)
+					if !exists {
+						responseContent = "Error: model failed to provide git arguments."
+					} else {
+						var gitArgs []string
+						for _, arg := range argsAny {
+							if strArg, ok := arg.(string); ok {
+								gitArgs = append(gitArgs, strArg)
+							}
+						}
+						currentDir, err := os.Getwd()
+						if err != nil {
+							responseContent = fmt.Sprintf("Error getting current directory: %v", err)
+						} else {
+							// Execute tool (hardcoded to target the current directory for now)
+							responseContent = tools.ExecuteGitCommand(currentDir, gitArgs)
+						}
+					}
+				default:
+					responseContent = fmt.Sprintf("Error: Unknown function %s called.", funcCall.Name)
+				}
+
+				// 3. Package the tool result
+				functionResponses = append(functionResponses, genai.Part{
+					FunctionResponse: &genai.FunctionResponse{
+						Name: funcCall.Name,
+						Response: map[string]any{
+							"result": responseContent,
+						},
+					},
+				})
+			}
+		}
+
+		// If no tools were requested, break the loop and return the text answer
+		if !hasFunctionCall {
+			break
+		}
+
+		// 4. Send the tool execution results back to the model for analysis
+		fmt.Printf("Handing %d tool result(s) back to %s for final synthesis...\n", len(functionResponses), agent.currentModel)
+		resp, err = agent.chatSession.SendMessage(ctx, functionResponses...)
+		if err != nil {
+			return "", err
 		}
 	}
 
-	resp := agent.client.Models.GenerateContentStream(
-		ctx,
-		agent.currentModel,
-		genai.Text(prompt),
-		config,
-	)
-
-	return resp
+	return resp.Text(), nil
 }
 
-// Endpoint 2: ListModels
 // Helper function to fetch and print available models
 func fetchGeminiModels(agent *GeminiAgent, ctx context.Context) {
 	fmt.Println("Fetching available models...")
@@ -99,7 +200,7 @@ func fetchGeminiModels(agent *GeminiAgent, ctx context.Context) {
 		log.Printf("Error listing models: %v\n", err)
 	} else {
 		for _, m := range models {
-			fmt.Println("- " + m)
+			fmt.Println("- " + strings.TrimLeft(m, "models/"))
 		}
 	}
 }
@@ -129,10 +230,10 @@ func selectGeminiModel(agent *GeminiAgent, parts []string) {
 	}
 }
 
-// Endpoint 3: SelectModel
-// Allows user to update the active model.
+// Allows user to update the active model and clear session history.
 func (agent *GeminiAgent) SelectModel(modelName string) {
 	agent.currentModel = modelName
+	agent.chatSession = nil // Clear session so it re-initializes with the new model
 	fmt.Printf("Model changed to: %s\n", agent.currentModel)
 }
 
@@ -143,125 +244,4 @@ func toggleGeminiConciseness(conciseMode *bool) {
 	} else {
 		fmt.Println("The model will respond in a more verbose manner.")
 	}
-}
-
-func getModelResponse(agent *GeminiAgent, ctx context.Context, input string, conciseMode bool) {
-	// Call Endpoint 1 & 4 (Process Input -> Output)
-	fmt.Printf("Thinking (%s)...\n", agent.currentModel)
-	responses := agent.GenerateStream(ctx, input, conciseMode)
-
-	fmt.Print("(Gemini) - ")
-	for chunk, err := range responses {
-		if err != nil {
-			log.Printf("\nError reading stream: %v\n", err)
-			break
-		}
-
-		// Print each chunk directly to the console without a newline
-		fmt.Print(chunk.Text())
-	}
-	fmt.Println()
-}
-
-func gitEndPoint(agent *GeminiAgent, ctx context.Context, prompt string, defaultRepoPath string) {
-	// Trigger the Git Agent Mode
-	gitInput := strings.TrimSpace(prompt)
-
-	// Assuming the target repository is the current directory
-	if defaultRepoPath == "" {
-		defaultRepoPath = "./"
-	}
-	response, err := agent.AnalyzeWithGit(ctx, gitInput, defaultRepoPath)
-	if err != nil {
-		log.Printf("Error analyzing repository: %v\n", err)
-	} else {
-		fmt.Println("\n(Gemini) - " + response)
-	}
-}
-
-// Endpoint: AnalyzeWithGit
-// Enables function calling specifically for Git operations
-func (agent *GeminiAgent) AnalyzeWithGit(ctx context.Context, prompt string, defaultRepoPath string) (string, error) {
-	gitTool := &genai.Tool{
-		FunctionDeclarations: []*genai.FunctionDeclaration{
-			{
-				Name:        "execute_git_command",
-				Description: "Executes a git command in a local repository. Only provide the arguments, not the 'git' binary itself.",
-				Parameters: &genai.Schema{
-					Type: genai.TypeObject,
-					Properties: map[string]*genai.Schema{
-						"args": {
-							Type:        genai.TypeArray,
-							Description: "A list of strings representing the git arguments (e.g., ['log', '-n', '3']).",
-							Items: &genai.Schema{
-								Type: genai.TypeString,
-							},
-						},
-					},
-					Required: []string{"args"},
-				},
-			},
-		},
-	}
-
-	config := &genai.GenerateContentConfig{
-		Tools: []*genai.Tool{gitTool},
-	}
-
-	// Initialize the chat session
-	chat, err := agent.client.Chats.Create(ctx, agent.currentModel, config, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create chat session: %w", err)
-	}
-
-	// Send the user's prompt
-	resp, err := chat.SendMessage(ctx, genai.Part{Text: prompt})
-	if err != nil {
-		return "", err
-	}
-
-	// Check if the model decided to call our function
-	if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
-		part := resp.Candidates[0].Content.Parts[0]
-
-		// Check if this part is a function call
-		if part.FunctionCall != nil && part.FunctionCall.Name == "execute_git_command" {
-			funcCall := part.FunctionCall
-
-			// Extract arguments safely
-			argsAny, exists := funcCall.Args["args"].([]any)
-			if !exists {
-				return "", fmt.Errorf("model failed to provide git arguments")
-			}
-
-			var gitArgs []string
-			for _, arg := range argsAny {
-				if strArg, ok := arg.(string); ok {
-					gitArgs = append(gitArgs, strArg)
-				}
-			}
-
-			// Execute the local Git command
-			gitOutput := tools.ExecuteGitCommand(defaultRepoPath, gitArgs)
-
-			// Package terminal output back to the model
-			funcResponse := genai.FunctionResponse{
-				Name: funcCall.Name,
-				Response: map[string]any{
-					"terminal_output": gitOutput,
-				},
-			}
-
-			fmt.Printf("Handing terminal output back to %s for analysis...\n", agent.currentModel)
-			finalResp, err := chat.SendMessage(ctx, genai.Part{FunctionResponse: &funcResponse})
-			if err != nil {
-				return "", err
-			}
-
-			return finalResp.Text(), nil
-		}
-	}
-
-	// Return standard text response if no function was called
-	return resp.Text(), nil
 }

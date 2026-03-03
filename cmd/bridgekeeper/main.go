@@ -26,14 +26,14 @@ func loadGeminiAPIKey() string {
 
 func runGeminiModel() {
 	ctx := context.Background()
-	var conciseMode bool = false
+	var conciseMode bool = true
 
 	apiKey := loadGeminiAPIKey()
 
-	// 3. Initialize the Gemini Agent
+	// Initialize the Gemini Agent
 	agent := createDefaultGeminiAgent(ctx, apiKey)
 
-	// 4. Start the CLI interactive loop
+	// Start the CLI interactive loop
 	reader := bufio.NewReader(os.Stdin)
 	printGeminiCommands(agent)
 
@@ -60,11 +60,9 @@ func runGeminiModel() {
 				return
 
 			case "/list":
-				// Call Endpoint 2
 				fetchGeminiModels(agent, ctx)
 
 			case "/model":
-				// Call Endpoint 3
 				selectGeminiModel(agent, parts)
 
 			case "/concise":
@@ -72,15 +70,6 @@ func runGeminiModel() {
 
 			case "/help":
 				printGeminiCommands(agent)
-
-			case "/git":
-				// Trigger the Git Agent Mode
-				fmt.Println("Git Agent Mode: ON (Target: ./)")
-				fmt.Print("Ask a question about the repository: ")
-
-				gitInput, _ := reader.ReadString('\n')
-
-				gitEndPoint(agent, ctx, gitInput, "./")
 
 			default:
 				fmt.Println("Unknown command. Try /help to list commands.")
@@ -90,6 +79,19 @@ func runGeminiModel() {
 			getModelResponse(agent, ctx, input, conciseMode)
 		}
 	}
+}
+
+func getModelResponse(agent *GeminiAgent, ctx context.Context, input string, conciseMode bool) {
+	fmt.Printf("Thinking (%s)...\n", agent.currentModel)
+
+	// Uses the new autonomous execution loop
+	response, err := agent.SendMessageWithTools(ctx, input, conciseMode)
+	if err != nil {
+		log.Printf("\nError getting response: %v\n", err)
+		return
+	}
+
+	fmt.Println("\n(Gemini) - " + response + "\n")
 }
 
 func main() {
