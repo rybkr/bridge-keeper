@@ -426,3 +426,48 @@ func TestEvaluate_MaxSizeBytesConstraint(t *testing.T) {
 		}
 	})
 }
+
+func TestEvaluate_TimeoutSecondsConstraint(t *testing.T) {
+	pf := &PolicyFile{
+		Default: "deny",
+		Capabilities: []Capability{
+			{
+				Name:     "bounded-shell",
+				Tool:     "shell",
+				Actions:  []string{"exec"},
+				Decision: "allow",
+				Constraints: &Constraints{
+					TimeoutSeconds: 30,
+				},
+			},
+		},
+	}
+	eng := makeEngine(pf)
+
+	t.Run("timeout under limit is allowed", func(t *testing.T) {
+		got := eng.Evaluate(context.Background(), call("shell", "exec", map[string]any{
+			"timeout": float64(15),
+		}))
+		if got.Decision != types.Allow {
+			t.Errorf("want Allow, got %q (reason: %s)", got.Decision, got.Reason)
+		}
+	})
+
+	t.Run("timeout at limit is allowed", func(t *testing.T) {
+		got := eng.Evaluate(context.Background(), call("shell", "exec", map[string]any{
+			"timeout": float64(30),
+		}))
+		if got.Decision != types.Allow {
+			t.Errorf("want Allow, got %q (reason: %s)", got.Decision, got.Reason)
+		}
+	})
+
+	t.Run("timeout over limit is denied", func(t *testing.T) {
+		got := eng.Evaluate(context.Background(), call("shell", "exec", map[string]any{
+			"timeout": float64(31),
+		}))
+		if got.Decision != types.Deny {
+			t.Errorf("want Deny, got %q (reason: %s)", got.Decision, got.Reason)
+		}
+	})
+}

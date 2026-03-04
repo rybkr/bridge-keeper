@@ -126,6 +126,14 @@ func checkConstraints(c *Constraints, call types.ToolCall) (string, bool) {
 		}
 	}
 
+	// Timeout constraint: if a timeout arg is supplied by the caller it must
+	// not exceed the capability-level timeout limit.
+	if c.TimeoutSeconds > 0 {
+		if timeout, ok := timeoutSeconds(call.Args); ok && timeout > c.TimeoutSeconds {
+			return fmt.Sprintf("timeout %d exceeds timeout_seconds %d", timeout, c.TimeoutSeconds), false
+		}
+	}
+
 	return "", true
 }
 
@@ -146,6 +154,32 @@ func payloadSize(args map[string]any) (int64, string) {
 		}
 	}
 	return 0, ""
+}
+
+// timeoutSeconds extracts a timeout value from args and normalizes it into
+// seconds. Returns (0, false) when timeout is missing or malformed.
+func timeoutSeconds(args map[string]any) (int, bool) {
+	raw, ok := args["timeout"]
+	if !ok {
+		return 0, false
+	}
+
+	switch v := raw.(type) {
+	case float64:
+		if v > 0 {
+			return int(v), true
+		}
+	case int:
+		if v > 0 {
+			return v, true
+		}
+	case int64:
+		if v > 0 {
+			return int(v), true
+		}
+	}
+
+	return 0, false
 }
 
 // checkAllowDenyGlob applies an AllowDeny rule to value using path glob patterns.
