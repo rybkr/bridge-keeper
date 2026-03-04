@@ -24,13 +24,13 @@ type evalOutput struct {
 }
 
 func main() {
-	policyDir := flag.String("policy-dir", "policies", "path to policy YAML directory")
+	policyPath := flag.String("policy", "policies", "path to policy YAML file or directory")
 	inputPath := flag.String("input", "-", "input NDJSON path, or '-' for stdin")
 	flag.Parse()
 
-	pf, err := policy.LoadDir(*policyDir)
+	pf, err := policy.LoadPath(*policyPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: loading policy dir: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: loading policy path: %v\n", err)
 		os.Exit(1)
 	}
 
