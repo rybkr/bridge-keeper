@@ -150,7 +150,51 @@ func parseToolCallLine(line []byte) (types.ToolCall, error) {
 		}
 	}
 
+	// Shape 4: fixture wrapper with a single request field.
+	var requestWrapped struct {
+		Request json.RawMessage `json:"request"`
+	}
+	if err := json.Unmarshal(line, &requestWrapped); err == nil && len(requestWrapped.Request) > 0 {
+		parsed, err := parseInnerRequest(requestWrapped.Request)
+		if err != nil {
+			return call, err
+		}
+		return parsed, nil
+	}
+
+	// Shape 5: fixture wrapper with workflow array (use first request).
+	var workflowWrapped struct {
+		Workflow []json.RawMessage `json:"workflow"`
+	}
+	if err := json.Unmarshal(line, &workflowWrapped); err == nil && len(workflowWrapped.Workflow) > 0 {
+		parsed, err := parseInnerRequest(workflowWrapped.Workflow[0])
+		if err != nil {
+			return call, err
+		}
+		return parsed, nil
+	}
+
 	return call, errors.New("line is not a valid tool_call json-rpc request, ToolCall object, or {\"call\": ToolCall} wrapper")
+}
+
+func parseInnerRequest(raw json.RawMessage) (types.ToolCall, error) {
+	var req types.JSONRPCRequest
+	if err := json.Unmarshal(raw, &req); err == nil && req.Method != "" {
+		if req.Method != "tool_call" {
+			return types.ToolCall{}, fmt.Errorf("unsupported json-rpc method %q", req.Method)
+		}
+		return parseToolCallFromParams(req.Params)
+	}
+
+	var call types.ToolCall
+	if err := json.Unmarshal(raw, &call); err == nil && call.Tool != "" && call.Action != "" {
+		if call.ID == "" {
+			call.ID = "line"
+		}
+		return call, nil
+	}
+
+	return types.ToolCall{}, errors.New("wrapper request/workflow item is not a valid tool_call")
 }
 
 func parseToolCallFromParams(params map[string]any) (types.ToolCall, error) {

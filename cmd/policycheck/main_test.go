@@ -47,6 +47,30 @@ func TestParseToolCallLine_WrappedCall(t *testing.T) {
 	}
 }
 
+func TestParseToolCallLine_RequestWrapper(t *testing.T) {
+	line := []byte(`{"description":"x","request":{"jsonrpc":"2.0","id":1,"method":"tool_call","params":{"id":"t4","tool":"git","action":"status"}},"expect":{"allowed":true}}`)
+
+	call, err := parseToolCallLine(line)
+	if err != nil {
+		t.Fatalf("parseToolCallLine() error = %v", err)
+	}
+	if call.ID != "t4" || call.Tool != "git" || call.Action != "status" {
+		t.Fatalf("unexpected call: %+v", call)
+	}
+}
+
+func TestParseToolCallLine_WorkflowWrapper(t *testing.T) {
+	line := []byte(`{"description":"x","workflow":[{"jsonrpc":"2.0","id":1,"method":"tool_call","params":{"id":"t5","tool":"fs","action":"read_file","args":{"path":"README.md"}}}],"expect":{"note":"x"}}`)
+
+	call, err := parseToolCallLine(line)
+	if err != nil {
+		t.Fatalf("parseToolCallLine() error = %v", err)
+	}
+	if call.ID != "t5" || call.Tool != "fs" || call.Action != "read_file" {
+		t.Fatalf("unexpected call: %+v", call)
+	}
+}
+
 func TestParseToolCallLine_Invalid(t *testing.T) {
 	_, err := parseToolCallLine([]byte(`{"jsonrpc":"2.0","id":1,"method":"list_tools"}`))
 	if err == nil {
