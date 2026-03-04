@@ -1,0 +1,3 @@
+{"description":"Direct localhost access","request":{"jsonrpc":"2.0","id":1,"method":"tool_call","params":{"id":"t1","tool":"http","action":"get","args":{"url":"http://localhost:8080/admin"}}},"expect":{"blocked":true,"reason":"domain deny: localhost"}}
+{"description":"Internal corp domain","request":{"jsonrpc":"2.0","id":2,"method":"tool_call","params":{"id":"t2","tool":"http","action":"get","args":{"url":"https://secrets.internal.corp/keys"}}},"expect":{"blocked":true,"reason":"domain deny: *.internal.corp"}}
+{"description":"127.0.0.1 bypass attempt","request":{"jsonrpc":"2.0","id":3,"method":"tool_call","params":{"id":"t3","tool":"http","action":"get","args":{"url":"http://127.0.0.1:9090/internal"}}},"expect":{"blocked":true,"reason":"domain deny: 127.0.0.1"}}

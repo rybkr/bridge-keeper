@@ -1,0 +1,1 @@
+{"description":"Write a new file (requires ask by default policy)","request":{"jsonrpc":"2.0","id":1,"method":"tool_call","params":{"id":"t1","tool":"fs","action":"write_file","args":{"path":"output.txt","content":"Generated content"}}},"expect":{"decision":"ask"}}
