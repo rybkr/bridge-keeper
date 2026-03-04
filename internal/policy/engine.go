@@ -49,23 +49,45 @@ func (e *Engine) Evaluate(_ context.Context, call types.ToolCall) types.PolicyDe
 			}
 		}
 
+		decision, normalized := normalizeDecision(cap.Decision)
+		reason := fmt.Sprintf("matched capability %q", cap.Name)
+		if !normalized {
+			reason = fmt.Sprintf("invalid capability decision %q for %q; failing closed to deny", cap.Decision, cap.Name)
+		}
+
 		return types.PolicyDecision{
-			Decision: types.Decision(cap.Decision),
-			Reason:   fmt.Sprintf("matched capability %q", cap.Name),
+			Decision: decision,
+			Reason:   reason,
 			Rule:     cap.Name,
 		}
 	}
 
 	// No capability matched — fall back to file-level default.
-	def := e.policy.Default
-	if def == "" {
-		def = string(types.Deny)
+	def, normalized := normalizeDecision(e.policy.Default)
+	reason := "no matching capability; using default decision"
+	if !normalized && strings.TrimSpace(e.policy.Default) != "" {
+		reason = fmt.Sprintf("no matching capability; invalid default decision %q so failing closed to deny", e.policy.Default)
 	}
 
 	return types.PolicyDecision{
-		Decision: types.Decision(def),
-		Reason:   "no matching capability; using default decision",
+		Decision: def,
+		Reason:   reason,
 		Rule:     "default",
+	}
+}
+
+// normalizeDecision converts an input decision to a known enum and defaults to
+// deny for empty or unknown values.
+func normalizeDecision(raw string) (types.Decision, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case string(types.Allow):
+		return types.Allow, true
+	case string(types.Ask):
+		return types.Ask, true
+	case string(types.Deny):
+		return types.Deny, true
+	default:
+		return types.Deny, false
 	}
 }
 

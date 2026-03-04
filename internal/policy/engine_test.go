@@ -211,6 +211,40 @@ func TestEvaluate_DefaultDecision_ExplicitAllow(t *testing.T) {
 	}
 }
 
+func TestEvaluate_InvalidCapabilityDecisionFailsClosed(t *testing.T) {
+	pf := &PolicyFile{
+		Default: "allow",
+		Capabilities: []Capability{
+			{Name: "bad-rule", Tool: "fs", Actions: []string{"read_file"}, Decision: "maybe"},
+		},
+	}
+	eng := makeEngine(pf)
+
+	got := eng.Evaluate(context.Background(), call("fs", "read_file", nil))
+	if got.Decision != types.Deny {
+		t.Errorf("Decision: want Deny for invalid decision, got %q", got.Decision)
+	}
+	if got.Rule != "bad-rule" {
+		t.Errorf("Rule: want bad-rule, got %q", got.Rule)
+	}
+}
+
+func TestEvaluate_InvalidDefaultFailsClosed(t *testing.T) {
+	pf := &PolicyFile{
+		Default:      "unknown",
+		Capabilities: []Capability{},
+	}
+	eng := makeEngine(pf)
+
+	got := eng.Evaluate(context.Background(), call("http", "get", nil))
+	if got.Decision != types.Deny {
+		t.Errorf("Decision: want Deny for invalid default, got %q", got.Decision)
+	}
+	if got.Rule != "default" {
+		t.Errorf("Rule: want default, got %q", got.Rule)
+	}
+}
+
 func TestEvaluate_DomainMatching(t *testing.T) {
 	tests := []struct {
 		name       string
