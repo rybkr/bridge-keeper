@@ -1,0 +1,21 @@
+version: "1"
+default: deny
+capabilities:
+  - name: read-files
+    tool: fs
+    actions: [read_file, list_dir]
+    decision: ask
+
+  - name: safe-shell
+    tool: shell
+    actions: [exec]
+    decision: ask
+    constraints:
+      commands:
+        allow: ["echo *", "cat *", "ls *", "grep *", "wc *", "head *", "tail *"]
+        deny: ["rm *", "sudo *", "chmod *", "chown *", "mkfs *", "dd *"]
+
+  - name: git-read-only
+    tool: git
+    actions: [status, log]
+    decision: allow
