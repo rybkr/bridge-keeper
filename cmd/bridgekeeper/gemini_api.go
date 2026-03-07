@@ -90,7 +90,7 @@ func (agent *GeminiAgent) getChatConfig(conciseMode bool) *genai.GenerateContent
 		config.SystemInstruction = &genai.Content{
 			Role: "model",
 			Parts: []*genai.Part{
-				{Text: "You are a highly efficient assistant. Always provide extremely concise, direct, and brief answers. Omit unnecessary pleasantries, filler words, or long explanations unless explicitly asked."},
+				{Text: "You are a highly efficient, general-purpose assistant. You can answer general knowledge questions, write code, and chat normally. You ALSO have access to tools to interact with Git repositories. Always provide extremely concise, direct, and brief answers. Omit unnecessary pleasantries, filler words, or long explanations unless explicitly asked."},
 			},
 		}
 		config.Temperature = genai.Ptr(rand.Float32() * 0.5)
@@ -98,7 +98,7 @@ func (agent *GeminiAgent) getChatConfig(conciseMode bool) *genai.GenerateContent
 		config.SystemInstruction = &genai.Content{
 			Role: "model",
 			Parts: []*genai.Part{
-				{Text: "You are a verbose assistant. Always provide detailed, comprehensive, and thorough answers. Include all relevant information and context unless explicitly asked to be concise."},
+				{Text: "You are a verbose, general-purpose assistant. You can answer general knowledge questions, write code, and chat normally. You ALSO have access to tools to interact with Git repositories. Always provide detailed, comprehensive, and thorough answers. Include all relevant information and context unless explicitly asked to be concise."},
 			},
 		}
 		config.Temperature = genai.Ptr(rand.Float32() + 1.0)
@@ -193,6 +193,7 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 				// 3. Package the tool result
 				functionResponses = append(functionResponses, genai.Part{
 					FunctionResponse: &genai.FunctionResponse{
+						ID:   funcCall.ID,
 						Name: funcCall.Name,
 						Response: map[string]any{
 							"result": responseContent,
@@ -215,7 +216,7 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 		}
 	}
 
-	print(resp.Text())
+	//print(resp.Text())
 
 	return resp.Text(), nil
 }
