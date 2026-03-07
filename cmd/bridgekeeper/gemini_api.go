@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand/v2"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"bridgekeeper/internal/tools"
+	"bridgekeeper/internal/types"
 
 	"google.golang.org/genai"
 )
@@ -19,10 +21,11 @@ type GeminiAgent struct {
 	currentModel string
 	chatSession  *genai.Chat // Tracks the persistent conversation
 	isConcise    bool        // Tracks configuration state
+	//policyEngine *policy.Engine
 }
 
 // createDefaultGeminiAgent initializes the agent with a default model.
-func createDefaultGeminiAgent(ctx context.Context, apiKey string) *GeminiAgent {
+func createDefaultGeminiAgent(ctx context.Context, apiKey string /*, engine *policy.Engine*/) *GeminiAgent {
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey: apiKey,
 	})
@@ -34,6 +37,7 @@ func createDefaultGeminiAgent(ctx context.Context, apiKey string) *GeminiAgent {
 	agent := GeminiAgent{
 		client:       client,
 		currentModel: "gemini-2.5-flash-lite",
+		//policyEngine: engine,
 	}
 	return &agent
 }
@@ -139,30 +143,52 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 				hasFunctionCall = true
 				var responseContent string
 
-				// 2. Route the function call to the correct local tool
+				toolCall := types.ToolCall{
+					ID:     "genai-internal",
+					Tool:   "git", // Categorizing this under the 'git' tool family
+					Action: funcCall.Name,
+					Args:   funcCall.Args,
+				}
+
+				ndjsonBytes, _ := json.Marshal(toolCall)
+				fmt.Printf("\n[POLICY ENG] Intercepted NDJSON: %s\n", string(ndjsonBytes))
+
+				//decision := agent.policyEngine.Evaluate(ctx, toolCall)
+				//fmt.Printf("[POLICY ENG] Decision: %s (Reason: %s)\n", decision.Decision, decision.Reason)
+
+				//if decision.Decision != types.Allow {
+				// Denied: Bypass execution and tell the AI why it failed
+				//	responseContent = fmt.Sprintf("Error: Execution denied by policy. Reason: %s", decision.Reason)
+				//} else {
+				// Allowed: Route to the actual tool execution (Your existing switch statement goes here)
 				switch funcCall.Name {
 				case "execute_git_command":
-					argsAny, exists := funcCall.Args["args"].([]any)
-					if !exists {
-						responseContent = "Error: model failed to provide git arguments."
-					} else {
-						var gitArgs []string
-						for _, arg := range argsAny {
-							if strArg, ok := arg.(string); ok {
-								gitArgs = append(gitArgs, strArg)
+					// 2. Route the function call to the correct local tool
+					switch funcCall.Name {
+					case "execute_git_command":
+						argsAny, exists := funcCall.Args["args"].([]any)
+						if !exists {
+							responseContent = "Error: model failed to provide git arguments."
+						} else {
+							var gitArgs []string
+							for _, arg := range argsAny {
+								if strArg, ok := arg.(string); ok {
+									gitArgs = append(gitArgs, strArg)
+								}
+							}
+							currentDir, err := os.Getwd()
+							if err != nil {
+								responseContent = fmt.Sprintf("Error getting current directory: %v", err)
+							} else {
+								// Execute tool (hardcoded to target the current directory for now)
+								responseContent = tools.ExecuteGitCommand(currentDir, gitArgs)
 							}
 						}
-						currentDir, err := os.Getwd()
-						if err != nil {
-							responseContent = fmt.Sprintf("Error getting current directory: %v", err)
-						} else {
-							// Execute tool (hardcoded to target the current directory for now)
-							responseContent = tools.ExecuteGitCommand(currentDir, gitArgs)
-						}
+					default:
+						responseContent = fmt.Sprintf("Error: Unknown function %s called.", funcCall.Name)
 					}
-				default:
-					responseContent = fmt.Sprintf("Error: Unknown function %s called.", funcCall.Name)
 				}
+				//}
 
 				// 3. Package the tool result
 				functionResponses = append(functionResponses, genai.Part{
@@ -188,6 +214,8 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 			return "", err
 		}
 	}
+
+	print(resp.Text())
 
 	return resp.Text(), nil
 }

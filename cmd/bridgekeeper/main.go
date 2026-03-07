@@ -29,9 +29,16 @@ func runGeminiModel() {
 	var conciseMode bool = true
 
 	apiKey := loadGeminiAPIKey()
+	/*pf, err := policy.LoadPath("policies")
+	if err != nil {
+		log.Printf("\n[WARNING] Could not load policy files from 'policies': %v", err)
+		log.Printf("[WARNING] Engine will start with an empty policy (default deny behavior may apply).\n\n")
+		pf = &policy.PolicyFile{}
+	}
+	engine := policy.NewEngine(pf)*/
 
 	// Initialize the Gemini Agent
-	agent := createDefaultGeminiAgent(ctx, apiKey)
+	agent := createDefaultGeminiAgent(ctx, apiKey /*, engine*/)
 
 	// Start the CLI interactive loop
 	reader := bufio.NewReader(os.Stdin)
