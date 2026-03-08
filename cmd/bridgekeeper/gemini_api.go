@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
-	"os"
 	"strings"
 
 	"bridgekeeper/internal/tools"
@@ -21,6 +20,7 @@ type GeminiAgent struct {
 	currentModel string
 	chatSession  *genai.Chat // Tracks the persistent conversation
 	isConcise    bool        // Tracks configuration state
+	lastPath     string      // For tools that require file system context
 	//policyEngine *policy.Engine
 }
 
@@ -37,6 +37,7 @@ func createDefaultGeminiAgent(ctx context.Context, apiKey string /*, engine *pol
 	agent := GeminiAgent{
 		client:       client,
 		currentModel: "gemini-2.5-flash-lite",
+		lastPath:     "./", // Default to current directory for tool context
 		//policyEngine: engine,
 	}
 	return &agent
@@ -73,6 +74,10 @@ func (agent *GeminiAgent) getChatConfig(conciseMode bool) *genai.GenerateContent
 							Items: &genai.Schema{
 								Type: genai.TypeString,
 							},
+						},
+						"path": {
+							Type:        genai.TypeString,
+							Description: "The directory path of the git repository. If omitted, the agent will use the previously accessed repository.",
 						},
 					},
 					Required: []string{"args"},
@@ -166,6 +171,13 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 					// 2. Route the function call to the correct local tool
 					switch funcCall.Name {
 					case "execute_git_command":
+
+						if pathAny, exists := funcCall.Args["path"]; exists {
+							if pathStr, ok := pathAny.(string); ok && pathStr != "" {
+								agent.lastPath = pathStr // Update state if path is provided
+							}
+						}
+
 						argsAny, exists := funcCall.Args["args"].([]any)
 						if !exists {
 							responseContent = "Error: model failed to provide git arguments."
@@ -176,13 +188,7 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 									gitArgs = append(gitArgs, strArg)
 								}
 							}
-							currentDir, err := os.Getwd()
-							if err != nil {
-								responseContent = fmt.Sprintf("Error getting current directory: %v", err)
-							} else {
-								// Execute tool (hardcoded to target the current directory for now)
-								responseContent = tools.ExecuteGitCommand(currentDir, gitArgs)
-							}
+							responseContent = tools.ExecuteGitCommand(agent.lastPath, gitArgs)
 						}
 					default:
 						responseContent = fmt.Sprintf("Error: Unknown function %s called.", funcCall.Name)
