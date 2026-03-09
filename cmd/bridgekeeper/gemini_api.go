@@ -83,6 +83,34 @@ func (agent *GeminiAgent) getChatConfig(conciseMode bool) *genai.GenerateContent
 					Required: []string{"args"},
 				},
 			},
+			{
+				Name:        "read_file",
+				Description: "Reads the full contents of a local file. Use this to analyze, summarize, or reference specific parts of a file. Provide the path to the file.",
+				Parameters: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"path": {
+							Type:        genai.TypeString,
+							Description: "The absolute or relative path to the file to read.",
+						},
+					},
+					Required: []string{"path"},
+				},
+			},
+			{
+				Name:        "list_directory",
+				Description: "Lists the contents of a specified directory. Use this to explore the repository structure, find files, or check for the presence of specific items.",
+				Parameters: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"path": {
+							Type:        genai.TypeString,
+							Description: "The path to the directory to list.",
+						},
+					},
+					Required: []string{"path"},
+				},
+			},
 		},
 	}
 
@@ -148,9 +176,20 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 				hasFunctionCall = true
 				var responseContent string
 
+				// Determine the tool family for the policy engine
+				var toolFamily string
+				switch funcCall.Name {
+				case "execute_git_command":
+					toolFamily = "git"
+				case "read_file":
+					toolFamily = "fs" // Filesystem operations
+				default:
+					toolFamily = "unknown"
+				}
+
 				toolCall := types.ToolCall{
 					ID:     "genai-internal",
-					Tool:   "git", // Categorizing this under the 'git' tool family
+					Tool:   toolFamily,
 					Action: funcCall.Name,
 					Args:   funcCall.Args,
 				}
@@ -167,32 +206,47 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 				//} else {
 				// Allowed: Route to the actual tool execution (Your existing switch statement goes here)
 				switch funcCall.Name {
+				// 2. Route the function call to the correct local tool implementation
 				case "execute_git_command":
-					// 2. Route the function call to the correct local tool
-					switch funcCall.Name {
-					case "execute_git_command":
 
-						if pathAny, exists := funcCall.Args["path"]; exists {
-							if pathStr, ok := pathAny.(string); ok && pathStr != "" {
-								agent.lastPath = pathStr // Update state if path is provided
-							}
+					if pathAny, exists := funcCall.Args["path"]; exists {
+						if pathStr, ok := pathAny.(string); ok && pathStr != "" {
+							agent.lastPath = pathStr // Update state if path is provided
 						}
-
-						argsAny, exists := funcCall.Args["args"].([]any)
-						if !exists {
-							responseContent = "Error: model failed to provide git arguments."
-						} else {
-							var gitArgs []string
-							for _, arg := range argsAny {
-								if strArg, ok := arg.(string); ok {
-									gitArgs = append(gitArgs, strArg)
-								}
-							}
-							responseContent = tools.ExecuteGitCommand(agent.lastPath, gitArgs)
-						}
-					default:
-						responseContent = fmt.Sprintf("Error: Unknown function %s called.", funcCall.Name)
 					}
+
+					argsAny, exists := funcCall.Args["args"].([]any)
+					if !exists {
+						responseContent = "Error: model failed to provide git arguments."
+					} else {
+						var gitArgs []string
+						for _, arg := range argsAny {
+							if strArg, ok := arg.(string); ok {
+								gitArgs = append(gitArgs, strArg)
+							}
+						}
+						responseContent = tools.ExecuteGitCommand(agent.lastPath, gitArgs)
+					}
+
+				case "read_file":
+					pathAny, exists := funcCall.Args["path"]
+					if !exists {
+						responseContent = "Error: model failed to provide file path."
+					} else if pathStr, ok := pathAny.(string); ok && pathStr != "" {
+						responseContent = tools.ReadFile(pathStr)
+					} else {
+						responseContent = "Error: path argument is invalid or empty."
+					}
+
+				case "list_directory":
+					if pathAny, exists := funcCall.Args["path"]; exists {
+						if pathStr, ok := pathAny.(string); ok && pathStr != "" {
+							agent.lastPath = pathStr // Update state if path is provided
+						}
+					}
+					responseContent = tools.ListDirectory(agent.lastPath)
+				default:
+					responseContent = fmt.Sprintf("Error: Unknown function %s called.", funcCall.Name)
 				}
 				//}
 
