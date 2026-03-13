@@ -1,0 +1,3 @@
+{"description":"Basic path traversal with ..","request":{"jsonrpc":"2.0","id":1,"method":"tool_call","params":{"id":"t1","tool":"fs","action":"read_file","args":{"path":"../../../etc/passwd"}}},"expect":{"blocked":true,"reason":"path traversal"}}
+{"description":"Encoded path traversal","request":{"jsonrpc":"2.0","id":2,"method":"tool_call","params":{"id":"t2","tool":"fs","action":"read_file","args":{"path":"foo/../../bar/../../../etc/shadow"}}},"expect":{"blocked":true,"reason":"path traversal"}}
+{"description":"Absolute path escape","request":{"jsonrpc":"2.0","id":3,"method":"tool_call","params":{"id":"t3","tool":"fs","action":"read_file","args":{"path":"/etc/passwd"}}},"expect":{"blocked":true,"reason":"absolute path"}}
