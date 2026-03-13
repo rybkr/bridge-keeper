@@ -1,4 +1,6 @@
-bridgekeeper
+cmd/bridgekeeper/bridgekeeper
+
+*.env
 
 *.exe
 *.exe~
@@ -10,6 +12,7 @@ bridgekeeper
 
 *.out
 *.log
+logs/*.md
 
 .idea/
 .vscode/

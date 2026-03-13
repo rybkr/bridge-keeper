@@ -57,7 +57,7 @@ func init() {
 }
 
 // //////////////////  Super awesome all in one log function  ////////////////////
-func logEvent(message string, severity ...Severity) {
+func LogEvent(message string, severity ...Severity) {
 
 	// Capture the time ASAP
 	eventTime := time.Now().Format("2006-01-02 15:04:05")
