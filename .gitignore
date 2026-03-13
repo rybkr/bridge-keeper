@@ -24,3 +24,4 @@ logs/*.md
 Thumbs.db
 
 vendor/
+*.swp
