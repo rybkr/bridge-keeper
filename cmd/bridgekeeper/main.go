@@ -1,26 +1,26 @@
 package main
 
 import (
+	"bridgekeeper/internal/audit"
+	"bridgekeeper/internal/engine"
+	"bridgekeeper/internal/hitl"
 	"context"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
-  "bridgekeeper/internal/audit"
-	"bridgekeeper/internal/engine"
-	"bridgekeeper/internal/hitl"
 )
 
 func main() {
-  audit.LogEvent("This is a test", audit.Debug)
-  
+	audit.LogEvent("This is a test", audit.Debug)
+
 	policyPath := flag.String("policy", "policies", "path to policy YAML file or directory")
 	logFile := flag.String("log-file", "", "audit log file path (default: stderr)")
 	verbose := flag.Bool("verbose", false, "enable verbose output")
 	noHITL := flag.Bool("no-hitl", false, "disable human-in-the-loop approval (auto-approve all)")
 	flag.Parse()
-  
+
 	cfg := engine.Config{
 		PolicyDir: *policyPath,
 		LogFile:   *logFile,
