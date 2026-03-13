@@ -23,3 +23,11 @@ type PolicyDecision struct {
 	Reason   string   `json:"reason"`
 	Rule     string   `json:"rule"`
 }
+
+// JSONRPCRequest represents a standard JSON-RPC request wrapper.
+type JSONRPCRequest struct {
+	JSONRPC string         `json:"jsonrpc,omitempty"`
+	Method  string         `json:"method"`
+	Params  map[string]any `json:"params,omitempty"`
+	ID      any            `json:"id,omitempty"`
+}

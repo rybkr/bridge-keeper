@@ -180,11 +180,22 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 
 				// Determine the tool family for the policy engine
 				var toolFamily string
+				var actionName string
 				switch funcCall.Name {
 				case "execute_git_command":
 					toolFamily = "git"
-				case "read_file", "list_directory":
+					if argsAny, ok := funcCall.Args["args"].([]any); ok && len(argsAny) > 0 {
+						if subCommand, ok := argsAny[0].(string); ok {
+							actionName = subCommand
+						}
+					}
+				case "read_file":
 					toolFamily = "fs" // Filesystem operations
+					actionName = "read_file"
+
+				case "list_directory":
+					toolFamily = "fs" // Filesystem operations
+					actionName = "list_dir"
 				default:
 					toolFamily = "unknown"
 				}
@@ -192,7 +203,7 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 				toolCall := types.ToolCall{
 					ID:     "genai-internal",
 					Tool:   toolFamily,
-					Action: funcCall.Name,
+					Action: actionName,
 					Args:   funcCall.Args,
 				}
 

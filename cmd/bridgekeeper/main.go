@@ -147,6 +147,7 @@ func main() {
 	logFile := flag.String("log-file", "", "audit log file path (default: stderr)")
 	verbose := flag.Bool("verbose", false, "enable verbose output")
 	noHITL := flag.Bool("no-hitl", false, "disable human-in-the-loop approval (auto-approve all)")
+	mode := flag.String("mode", "", "mode to run the agent in (ollama or gemini)")
 	flag.Parse()
 
 	cfg := engine.Config{
@@ -207,51 +208,32 @@ func main() {
 		os.Exit(1)
 	}
 
-	pf, err := policy.LoadPath("../../policies/default.yaml")
+	if *policyPath != "" {
+		*policyPath = "../../policies/default.yaml"
+	}
+
+	pf, err := policy.LoadPath(*policyPath)
 	if err != nil {
 		log.Printf("\n[WARNING] Could not load policy files: %v", err)
 		pf = &policy.PolicyFile{}
 	}
 	directEngine := policy.NewEngine(pf)
 
-	// Parse --mode flag
-	mode := ""
-	args := os.Args[1:]
-	for i, arg := range args {
-		if arg == "--mode" && i+1 < len(args) {
-			mode = args[i+1]
-			break
-		}
+	if *mode == "" {
+		fmt.Println("Invalid selection please select Gemini or Ollama with --mode flag.")
+		os.Exit(1)
 	}
 
-	if mode == "" {
-		fmt.Println("Select an agent implementation to use:")
-		fmt.Println("1) gemini")
-		fmt.Println("2) ollama")
-		fmt.Print("> ")
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(strings.ToLower(input))
-		if input == "1" || input == "gemini" {
-			mode = "gemini"
-		} else if input == "2" || input == "ollama" {
-			mode = "ollama"
-		} else {
-			fmt.Println("Invalid selection. Defaulting to gemini.")
-			mode = "gemini"
-		}
-	}
+	audit.LogEvent(fmt.Sprintf("System initialized. Entering %s mode.", *mode), audit.Info)
 
-	audit.LogEvent(fmt.Sprintf("System initialized. Entering %s mode.", mode), audit.Info)
+	switch *mode {
 
-	switch mode {
-
-	case "ollama":
+	case "ollama", "Ollama":
 		/////// OLLAMA ///////
 		// This just runs through a list of prompts for testing
 
 		if err := runtime.Initialize(11434); nil != err {
-			log.Fatalf("Could not initialize: %w", err)
+			log.Fatalf("Could not initialize: %s", err)
 		}
 
 		// Call the anonymous function once main exits scope
@@ -276,7 +258,7 @@ func main() {
 			fmt.Printf("< %s\n", response)
 		}
 
-	case "gemini":
+	case "gemini", "Gemini":
 		/////// GEMINI ///////
 		// This actually runs as a chat
 		runGeminiModel(directEngine)
