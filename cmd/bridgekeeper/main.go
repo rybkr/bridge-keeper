@@ -3,55 +3,56 @@ package main
 import (
 	"bufio"
 	"context"
+	"flag"
 	"fmt"
-  "flag"
 	"log"
-	"bridgekeeper/internal/runtime"
-  "bridgekeeper/internal/audit"
-	"bridgekeeper/internal/engine"
-	"bridgekeeper/internal/hitl"
 	"os"
 	"os/signal"
 	"strings"
-  "syscall"
+	"syscall"
+
+	"bridgekeeper/internal/audit"
+	"bridgekeeper/internal/engine"
+	"bridgekeeper/internal/hitl"
+	"bridgekeeper/internal/policy"
+	"bridgekeeper/internal/runtime"
+
 	"github.com/joho/godotenv"
 )
-
 
 /////// Toolchain placeholders ///////
 
 func handleGoVersion(args map[string]any) (string, error) {
-    // TODO: Replace with better result structs
-    // or exec or something
-    return "go version go1.25.7 linux/amd64", nil
+	// TODO: Replace with better result structs
+	// or exec or something
+	return "go version go1.25.7 linux/amd64", nil
 }
 
 func handleRustVersion(args map[string]any) (string, error) {
-    // TODO: Replace with better result structs
-    // or exec or something
-    return "cargo 1.65.0", nil
+	// TODO: Replace with better result structs
+	// or exec or something
+	return "cargo 1.65.0", nil
 }
 
 var toolchain = []runtime.ToolDef{
-    {
-        Name: "go_version",
-        Description: "Get the current version of go",
-        Handler: handleGoVersion,
-    },
-        {
-        Name: "rust_version",
-        Description: "Get the current version of Rust",
-        Handler: handleRustVersion,
-    },
+	{
+		Name:        "go_version",
+		Description: "Get the current version of go",
+		Handler:     handleGoVersion,
+	},
+	{
+		Name:        "rust_version",
+		Description: "Get the current version of Rust",
+		Handler:     handleRustVersion,
+	},
 }
 
-/// Deferred shutdown ///
+// / Deferred shutdown ///
 func deferredShutdown() {
-    if err := runtime.Shutdown(); nil != err {
-        log.Printf("shutdown %v", err)
-    }
+	if err := runtime.Shutdown(); nil != err {
+		log.Printf("shutdown %v", err)
+	}
 }
-
 
 func loadGeminiAPIKey() string {
 	err := godotenv.Load()
@@ -66,21 +67,14 @@ func loadGeminiAPIKey() string {
 	return apiKey
 }
 
-func runGeminiModel() {
+func runGeminiModel(eng *policy.Engine) {
 	ctx := context.Background()
 	var conciseMode bool = true
 
 	apiKey := loadGeminiAPIKey()
-	/*pf, err := policy.LoadPath("policies")
-	if err != nil {
-		log.Printf("\n[WARNING] Could not load policy files from 'policies': %v", err)
-		log.Printf("[WARNING] Engine will start with an empty policy (default deny behavior may apply).\n\n")
-		pf = &policy.PolicyFile{}
-	}
-	engine := policy.NewEngine(pf)*/
 
 	// Initialize the Gemini Agent
-	agent := createDefaultGeminiAgent(ctx, apiKey /*, engine*/)
+	agent := createDefaultGeminiAgent(ctx, apiKey, eng)
 
 	// Start the CLI interactive loop
 	reader := bufio.NewReader(os.Stdin)
@@ -97,6 +91,8 @@ func runGeminiModel() {
 		if input == "" {
 			continue
 		}
+
+		audit.LogEvent("User input received: "+input, audit.Info)
 
 		// Handle commands vs. prompts
 		if strings.HasPrefix(input, "/") {
@@ -143,8 +139,7 @@ func getModelResponse(agent *GeminiAgent, ctx context.Context, input string, con
 	fmt.Println("\n(Gemini) - " + response + "\n")
 }
 
-
-/////// MAIN ///////
+// ///// MAIN ///////
 func main() {
 	audit.LogEvent("This is a test", audit.Debug)
 
@@ -211,55 +206,83 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-  
- 
-  // Parse --mode flag
-  mode := ""
-  args := os.Args[1:]
-  for i, arg := range args {
-      if arg == "--mode" && i+1 < len(args) {
-          mode = args[i+1]
-          break
-      }
-  }
 
-  switch mode {
+	pf, err := policy.LoadPath("../../policies/default.yaml")
+	if err != nil {
+		log.Printf("\n[WARNING] Could not load policy files: %v", err)
+		pf = &policy.PolicyFile{}
+	}
+	directEngine := policy.NewEngine(pf)
 
-  case "ollama":
-      /////// OLLAMA ///////
-      // This just runs through a list of prompts for testing
+	// Parse --mode flag
+	mode := ""
+	args := os.Args[1:]
+	for i, arg := range args {
+		if arg == "--mode" && i+1 < len(args) {
+			mode = args[i+1]
+			break
+		}
+	}
 
-      if err := runtime.Initialize(11434); nil != err {
-          log.Fatalf("Could not initialize: %w", err)
-      }
+	if mode == "" {
+		fmt.Println("Select an agent implementation to use:")
+		fmt.Println("1) gemini")
+		fmt.Println("2) ollama")
+		fmt.Print("> ")
+		reader := bufio.NewReader(os.Stdin)
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(strings.ToLower(input))
+		if input == "1" || input == "gemini" {
+			mode = "gemini"
+		} else if input == "2" || input == "ollama" {
+			mode = "ollama"
+		} else {
+			fmt.Println("Invalid selection. Defaulting to gemini.")
+			mode = "gemini"
+		}
+	}
 
-      // Call the anonymous function once main exits scope
-      defer deferredShutdown()
+	audit.LogEvent(fmt.Sprintf("System initialized. Entering %s mode.", mode), audit.Info)
 
-      // simple tests - replace with filtered promtps later
-      prompts := []string {
-          "Get the version of Go",
-          "Get the version of rust with Cargo",
-      }
+	switch mode {
 
-      // send the list of prompts
-      for _, prompt := range prompts {
-          fmt.Printf("\n> %s\n", prompt)
-          response, err := runtime.QueryWithTools(prompt, toolchain)
-          if nil != err {
-              log.Printf("Query error %v", err)
-              continue // attempt other prompts
-          }
-          fmt.Printf("< %s\n", response)
-      }
+	case "ollama":
+		/////// OLLAMA ///////
+		// This just runs through a list of prompts for testing
 
-  case "gemini":
-      /////// GEMINI ///////
-      // This actually runs as a chat
-      runGeminiModel()
+		if err := runtime.Initialize(11434); nil != err {
+			log.Fatalf("Could not initialize: %w", err)
+		}
 
-  default:
-      fmt.Fprintf(os.Stderr, "Usage: %s --mode <ollama|gemini>\n", os.Args[0])
-      os.Exit(1)
-  }
+		// Call the anonymous function once main exits scope
+		defer deferredShutdown()
+
+		// simple tests - replace with filtered promtps later
+		prompts := []string{
+			"Get the version of Go",
+			"Get the version of rust with Cargo",
+		}
+
+		// send the list of prompts
+		for _, prompt := range prompts {
+			fmt.Printf("\n> %s\n", prompt)
+			audit.LogEvent("Sending Ollama Prompt: "+prompt, audit.Info)
+			response, err := runtime.QueryWithTools(prompt, toolchain, directEngine)
+			if nil != err {
+				log.Printf("Query error %v", err)
+				audit.LogEvent(fmt.Sprintf("Ollama Query Error: %v", err), audit.Error)
+				continue // attempt other prompts
+			}
+			fmt.Printf("< %s\n", response)
+		}
+
+	case "gemini":
+		/////// GEMINI ///////
+		// This actually runs as a chat
+		runGeminiModel(directEngine)
+
+	default:
+		fmt.Fprintf(os.Stderr, "Usage: %s --mode <ollama|gemini>\n", os.Args[0])
+		os.Exit(1)
+	}
 }

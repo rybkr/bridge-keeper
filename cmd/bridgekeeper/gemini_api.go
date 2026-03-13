@@ -8,6 +8,8 @@ import (
 	"math/rand/v2"
 	"strings"
 
+	"bridgekeeper/internal/audit"
+	"bridgekeeper/internal/policy"
 	"bridgekeeper/internal/tools"
 	"bridgekeeper/internal/types"
 
@@ -21,11 +23,11 @@ type GeminiAgent struct {
 	chatSession  *genai.Chat // Tracks the persistent conversation
 	isConcise    bool        // Tracks configuration state
 	lastPath     string      // For tools that require file system context
-	//policyEngine *policy.Engine
+	policyEngine *policy.Engine
 }
 
 // createDefaultGeminiAgent initializes the agent with a default model.
-func createDefaultGeminiAgent(ctx context.Context, apiKey string /*, engine *policy.Engine*/) *GeminiAgent {
+func createDefaultGeminiAgent(ctx context.Context, apiKey string, engine *policy.Engine) *GeminiAgent {
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey: apiKey,
 	})
@@ -38,7 +40,7 @@ func createDefaultGeminiAgent(ctx context.Context, apiKey string /*, engine *pol
 		client:       client,
 		currentModel: "gemini-2.5-flash-lite",
 		lastPath:     "./", // Default to current directory for tool context
-		//policyEngine: engine,
+		policyEngine: engine,
 	}
 	return &agent
 }
@@ -181,7 +183,7 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 				switch funcCall.Name {
 				case "execute_git_command":
 					toolFamily = "git"
-				case "read_file":
+				case "read_file", "list_directory":
 					toolFamily = "fs" // Filesystem operations
 				default:
 					toolFamily = "unknown"
@@ -196,59 +198,62 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 
 				ndjsonBytes, _ := json.Marshal(toolCall)
 				fmt.Printf("\n[POLICY ENG] Intercepted NDJSON: %s\n", string(ndjsonBytes))
+				audit.LogEvent(fmt.Sprintf("Gemini tool call intercepted: %s", string(ndjsonBytes)), audit.Info)
 
-				//decision := agent.policyEngine.Evaluate(ctx, toolCall)
-				//fmt.Printf("[POLICY ENG] Decision: %s (Reason: %s)\n", decision.Decision, decision.Reason)
+				decision := agent.policyEngine.Evaluate(ctx, toolCall)
+				fmt.Printf("[POLICY ENG] Decision: %s (Reason: %s)\n", decision.Decision, decision.Reason)
+				audit.LogEvent(fmt.Sprintf("Policy Decision: %s - %s", decision.Decision, decision.Reason), audit.Info)
 
-				//if decision.Decision != types.Allow {
-				// Denied: Bypass execution and tell the AI why it failed
-				//	responseContent = fmt.Sprintf("Error: Execution denied by policy. Reason: %s", decision.Reason)
-				//} else {
-				// Allowed: Route to the actual tool execution (Your existing switch statement goes here)
-				switch funcCall.Name {
-				// 2. Route the function call to the correct local tool implementation
-				case "execute_git_command":
+				if decision.Decision != types.Allow {
+					// Denied: Bypass execution and tell the AI why it failed
+					responseContent = fmt.Sprintf("Error: Execution denied by policy. Reason: %s", decision.Reason)
+					audit.LogEvent(fmt.Sprintf("Execution bypassed. Returned policy rejection to Gemini."), audit.Warning)
+				} else {
+					audit.LogEvent(fmt.Sprintf("Execution allowed. Running tool: %s", funcCall.Name), audit.Info)
+					switch funcCall.Name {
+					// Route the function call to the correct local tool implementation
+					case "execute_git_command":
 
-					if pathAny, exists := funcCall.Args["path"]; exists {
-						if pathStr, ok := pathAny.(string); ok && pathStr != "" {
-							agent.lastPath = pathStr // Update state if path is provided
-						}
-					}
-
-					argsAny, exists := funcCall.Args["args"].([]any)
-					if !exists {
-						responseContent = "Error: model failed to provide git arguments."
-					} else {
-						var gitArgs []string
-						for _, arg := range argsAny {
-							if strArg, ok := arg.(string); ok {
-								gitArgs = append(gitArgs, strArg)
+						if pathAny, exists := funcCall.Args["path"]; exists {
+							if pathStr, ok := pathAny.(string); ok && pathStr != "" {
+								agent.lastPath = pathStr
 							}
 						}
-						responseContent = tools.ExecuteGitCommand(agent.lastPath, gitArgs)
-					}
 
-				case "read_file":
-					pathAny, exists := funcCall.Args["path"]
-					if !exists {
-						responseContent = "Error: model failed to provide file path."
-					} else if pathStr, ok := pathAny.(string); ok && pathStr != "" {
-						responseContent = tools.ReadFile(pathStr)
-					} else {
-						responseContent = "Error: path argument is invalid or empty."
-					}
-
-				case "list_directory":
-					if pathAny, exists := funcCall.Args["path"]; exists {
-						if pathStr, ok := pathAny.(string); ok && pathStr != "" {
-							agent.lastPath = pathStr // Update state if path is provided
+						argsAny, exists := funcCall.Args["args"].([]any)
+						if !exists {
+							responseContent = "Error: model failed to provide git arguments."
+						} else {
+							var gitArgs []string
+							for _, arg := range argsAny {
+								if strArg, ok := arg.(string); ok {
+									gitArgs = append(gitArgs, strArg)
+								}
+							}
+							responseContent = tools.ExecuteGitCommand(agent.lastPath, gitArgs)
 						}
+
+					case "read_file":
+						pathAny, exists := funcCall.Args["path"]
+						if !exists {
+							responseContent = "Error: model failed to provide file path."
+						} else if pathStr, ok := pathAny.(string); ok && pathStr != "" {
+							responseContent = tools.ReadFile(pathStr)
+						} else {
+							responseContent = "Error: path argument is invalid or empty."
+						}
+
+					case "list_directory":
+						if pathAny, exists := funcCall.Args["path"]; exists {
+							if pathStr, ok := pathAny.(string); ok && pathStr != "" {
+								agent.lastPath = pathStr // Update state if path is provided
+							}
+						}
+						responseContent = tools.ListDirectory(agent.lastPath)
+					default:
+						responseContent = fmt.Sprintf("Error: Unknown function %s called.", funcCall.Name)
 					}
-					responseContent = tools.ListDirectory(agent.lastPath)
-				default:
-					responseContent = fmt.Sprintf("Error: Unknown function %s called.", funcCall.Name)
 				}
-				//}
 
 				// 3. Package the tool result
 				functionResponses = append(functionResponses, genai.Part{
