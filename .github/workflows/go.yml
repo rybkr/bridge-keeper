@@ -1,51 +1,40 @@
-# This workflow will build a golang project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
-
 name: Go
 
 on:
   workflow_dispatch:
-    inputs:
-      ignore_me:
-        description: "This is a placeholder so you can run manual actions"
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
 
 jobs:
-
-  setup:
+  ci:
     runs-on: ubuntu-latest
     steps:
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: '1.24.x'
-
-      - name: Go Version
-        run: |
-          which go
-          go version
-
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          
-  build:
-    runs-on: ubuntu-latest
-    steps:
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+
       - name: Check Format
         run: |
-          CHANGED_FILES=$(git diff --name-only --diff-filter=ACM ${{ github.event.before }} ${{ github.sha }}) | grep '\.go$' || true
-          if [ -n "$CHANGED_FILES" ]; then
-            echo "Running go fmt -n on changed files:"
-            echo "$CHANGED_FILES"
-            echo "$CHANGED_FILES" | xargs go fmt -n
-          else
-            echo "No Go files changed"
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted files:"
+            echo "$unformatted"
+            exit 1
           fi
 
+      - name: Vet
+        run: go vet ./...
+
       - name: Build
-        run: go build -v main.go
+        run: go build -v ./cmd/bridgekeeper/
+
+      - name: Test
+        run: go test -v -race ./...

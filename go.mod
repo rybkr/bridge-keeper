@@ -4,6 +4,8 @@ go 1.25.1
 
 require (
 	github.com/joho/godotenv v1.5.1
+  github.com/google/uuid v1.6.0
+	gopkg.in/yaml.v3 v3.0.1
 	google.golang.org/genai v1.47.0
 )
 
@@ -31,4 +33,3 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/grpc v1.73.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
-)
