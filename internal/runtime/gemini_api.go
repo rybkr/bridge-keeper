@@ -1,4 +1,4 @@
-package main
+package runtime
 
 import (
 	"context"
@@ -19,15 +19,15 @@ import (
 // GeminiAgent serves as the API layer for interaction with the service.
 type GeminiAgent struct {
 	client       *genai.Client
-	currentModel string
+	CurrentModel string
 	chatSession  *genai.Chat // Tracks the persistent conversation
 	isConcise    bool        // Tracks configuration state
 	lastPath     string      // For tools that require file system context
 	policyEngine *policy.Engine
 }
 
-// createDefaultGeminiAgent initializes the agent with a default model.
-func createDefaultGeminiAgent(ctx context.Context, apiKey string, engine *policy.Engine) *GeminiAgent {
+// CreateDefaultGeminiAgent initializes the agent with a default model.
+func CreateDefaultGeminiAgent(ctx context.Context, apiKey string, engine *policy.Engine) *GeminiAgent {
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey: apiKey,
 	})
@@ -38,24 +38,11 @@ func createDefaultGeminiAgent(ctx context.Context, apiKey string, engine *policy
 
 	agent := GeminiAgent{
 		client:       client,
-		currentModel: "gemini-2.5-flash-lite",
+		CurrentModel: "gemini-2.5-flash-lite",
 		lastPath:     "./", // Default to current directory for tool context
 		policyEngine: engine,
 	}
 	return &agent
-}
-
-func printGeminiCommands(agent *GeminiAgent) {
-	fmt.Println("--- BridgeKeeper Gemini ---")
-	fmt.Printf("Current Model: %s\n", agent.currentModel)
-	fmt.Println("Commands:")
-	fmt.Println("  /help          - Show this help message")
-	fmt.Println("  /list          - List available models")
-	fmt.Println("  /model <name>  - Select a model (e.g., /model gemini-1.5-pro)")
-	fmt.Println("  /concise       - Toggle the verboseness of the Model")
-	fmt.Println("  <your prompt>  - Chat with the AI (Auto-Tools Enabled)")
-	fmt.Println("  /exit          - Quit")
-	fmt.Println("-------------------------------")
 }
 
 // getChatConfig centralizes the tool registry and system instructions.
@@ -149,7 +136,7 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 	// Initialize or Re-initialize the chat session if settings change
 	if agent.chatSession == nil || agent.isConcise != conciseMode {
 		config := agent.getChatConfig(conciseMode)
-		chat, err := agent.client.Chats.Create(ctx, agent.currentModel, config, nil)
+		chat, err := agent.client.Chats.Create(ctx, agent.CurrentModel, config, nil)
 		if err != nil {
 			return "", fmt.Errorf("failed to create chat session: %w", err)
 		}
@@ -285,7 +272,7 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 		}
 
 		// 4. Send the tool execution results back to the model for analysis
-		fmt.Printf("Handing %d tool result(s) back to %s for final synthesis...\n", len(functionResponses), agent.currentModel)
+		fmt.Printf("Handing %d tool result(s) back to %s for final synthesis...\n", len(functionResponses), agent.CurrentModel)
 		resp, err = agent.chatSession.SendMessage(ctx, functionResponses...)
 		if err != nil {
 			return "", err
@@ -298,7 +285,7 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 }
 
 // Helper function to fetch and print available models
-func fetchGeminiModels(agent *GeminiAgent, ctx context.Context) {
+func FetchGeminiModels(agent *GeminiAgent, ctx context.Context) {
 	fmt.Println("Fetching available models...")
 	models, err := agent.ListModels(ctx)
 	if err != nil {
@@ -327,7 +314,7 @@ func (agent *GeminiAgent) ListModels(ctx context.Context) ([]string, error) {
 }
 
 // SelectModel allows the user to change the active model for generation.
-func selectGeminiModel(agent *GeminiAgent, parts []string) {
+func SelectGeminiModel(agent *GeminiAgent, parts []string) {
 	if len(parts) < 2 {
 		fmt.Println("Usage: /model <model_name>")
 	} else {
@@ -337,12 +324,12 @@ func selectGeminiModel(agent *GeminiAgent, parts []string) {
 
 // Allows user to update the active model and clear session history.
 func (agent *GeminiAgent) SelectModel(modelName string) {
-	agent.currentModel = modelName
+	agent.CurrentModel = modelName
 	agent.chatSession = nil // Clear session so it re-initializes with the new model
-	fmt.Printf("Model changed to: %s\n", agent.currentModel)
+	fmt.Printf("Model changed to: %s\n", agent.CurrentModel)
 }
 
-func toggleGeminiConciseness(conciseMode *bool) {
+func ToggleGeminiConciseness(conciseMode *bool) {
 	*conciseMode = !*conciseMode
 	if *conciseMode {
 		fmt.Println("The model will respond in a more direct manner.")
