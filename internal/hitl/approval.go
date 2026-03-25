@@ -1,12 +1,12 @@
 package hitl
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"strings"
 
+	"bridgekeeper/internal/console"
 	"bridgekeeper/internal/types"
 )
 
@@ -18,8 +18,9 @@ type AutoDenier struct{}
 
 // TerminalApprover prompts a human user in the terminal to approve or deny an action.
 type TerminalApprover struct {
-	in  *os.File
-	out *os.File
+	in      *os.File
+	out     *os.File
+	session *console.Session
 }
 
 // NewTerminalApprover initializes a new TerminalApprover.
@@ -34,7 +35,13 @@ func NewTerminalApprover() (*TerminalApprover, error) {
 		_ = in.Close()
 		return nil, err
 	}
-	return &TerminalApprover{in: in, out: out}, nil
+	session, err := console.NewSession(in, out)
+	if err != nil {
+		_ = in.Close()
+		_ = out.Close()
+		return nil, err
+	}
+	return &TerminalApprover{in: in, out: out, session: session}, nil
 }
 
 func (a *AutoApprover) Approve(_ context.Context, _ types.ToolCall, _ types.PolicyDecision) (bool, error) {
@@ -46,7 +53,7 @@ func (a *AutoDenier) Approve(_ context.Context, _ types.ToolCall, _ types.Policy
 }
 
 func (t *TerminalApprover) Approve(ctx context.Context, call types.ToolCall, decision types.PolicyDecision) (bool, error) {
-	if t == nil || t.in == nil || t.out == nil {
+	if t == nil || t.in == nil || t.out == nil || t.session == nil {
 		return false, fmt.Errorf("terminal approver is not initialized")
 	}
 
@@ -56,12 +63,7 @@ func (t *TerminalApprover) Approve(ctx context.Context, call types.ToolCall, dec
 	default:
 	}
 
-	if _, err := fmt.Fprintf(t.out, "Approve tool call? tool=%s action=%s reason=%s [y/N]: ", call.Tool, call.Action, decision.Reason); err != nil {
-		return false, err
-	}
-
-	reader := bufio.NewReader(t.in)
-	line, err := reader.ReadString('\n')
+	line, err := t.session.ReadLine(fmt.Sprintf("Approve tool call? tool=%s action=%s reason=%s [y/N]: ", call.Tool, call.Action, decision.Reason))
 	if err != nil {
 		return false, err
 	}

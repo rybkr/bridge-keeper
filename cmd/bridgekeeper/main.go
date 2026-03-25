@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -14,6 +13,7 @@ import (
 
 	bkagent "bridgekeeper/internal/agent"
 	"bridgekeeper/internal/audit"
+	"bridgekeeper/internal/console"
 	"bridgekeeper/internal/hitl"
 	"bridgekeeper/internal/policy"
 	"bridgekeeper/internal/redact"
@@ -54,15 +54,20 @@ func runGeminiModel(mediator *runtime.Mediator, registry *tools.Registry) {
 
 	// Initialize the Gemini Agent
 	agent := bkagent.NewGeminiAgent(ctx, apiKey, mediator, registry)
+	session, err := console.NewSession(os.Stdin, os.Stdout)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	// Start the CLI interactive loop
-	reader := bufio.NewReader(os.Stdin)
 	printGeminiCommands(agent)
 
 	for {
-		fmt.Print("> ")
-		input, err := reader.ReadString('\n')
+		input, err := session.ReadLine("> ")
 		if err != nil {
+			if console.IsInterrupt(err) {
+				fmt.Println("\nGoodbye!")
+				return
+			}
 			log.Fatal(err)
 		}
 
@@ -98,22 +103,28 @@ func runGeminiModel(mediator *runtime.Mediator, registry *tools.Registry) {
 			}
 
 		} else {
-			getModelResponse(agent, ctx, input, conciseMode)
+			if err := getModelResponse(agent, ctx, input, conciseMode); err != nil {
+				if console.IsInterrupt(err) {
+					fmt.Println("\nGoodbye!")
+					return
+				}
+				log.Printf("\nError getting response: %v\n", err)
+			}
 		}
 	}
 }
 
-func getModelResponse(agent *bkagent.GeminiAgent, ctx context.Context, input string, conciseMode bool) {
+func getModelResponse(agent *bkagent.GeminiAgent, ctx context.Context, input string, conciseMode bool) error {
 	fmt.Printf("Thinking (%s)...\n", agent.CurrentModel())
 
 	// Uses the new autonomous execution loop
 	response, err := agent.SendMessageWithTools(ctx, input, conciseMode)
 	if err != nil {
-		log.Printf("\nError getting response: %v\n", err)
-		return
+		return err
 	}
 
 	fmt.Println("\n(Gemini) - " + response + "\n")
+	return nil
 }
 
 func printGeminiCommands(agent *bkagent.GeminiAgent) {
