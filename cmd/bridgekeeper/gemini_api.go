@@ -22,10 +22,11 @@ type GeminiAgent struct {
 	isConcise    bool        // Tracks configuration state
 	lastPath     string      // For tools that require file system context
 	mediator     *runtime.Mediator
+	registry     *tools.Registry
 }
 
 // createDefaultGeminiAgent initializes the agent with a default model.
-func createDefaultGeminiAgent(ctx context.Context, apiKey string, mediator *runtime.Mediator) *GeminiAgent {
+func createDefaultGeminiAgent(ctx context.Context, apiKey string, mediator *runtime.Mediator, registry *tools.Registry) *GeminiAgent {
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey: apiKey,
 	})
@@ -37,8 +38,9 @@ func createDefaultGeminiAgent(ctx context.Context, apiKey string, mediator *runt
 	agent := GeminiAgent{
 		client:       client,
 		currentModel: "gemini-2.5-flash-lite",
-		lastPath:     "./", // Default to current directory for tool context
+		lastPath:     registry.WorkspaceRoot,
 		mediator:     mediator,
+		registry:     registry,
 	}
 	return &agent
 }
@@ -224,7 +226,7 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 								gitArgs = append(gitArgs, strArg)
 							}
 						}
-						return tools.ExecuteGitCommand(agent.lastPath, gitArgs), nil
+						return agent.registry.ExecuteGitCommand(ctx, tools.GitExecArgs{Path: agent.lastPath, Args: gitArgs})
 					case "read_file":
 						pathAny, exists := args["path"]
 						if !exists {
@@ -234,14 +236,14 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 						if !ok || pathStr == "" {
 							return "Error: path argument is invalid or empty.", nil
 						}
-						return tools.ReadFile(pathStr), nil
+						return agent.registry.ReadFile(ctx, tools.ReadFileArgs{Path: pathStr})
 					case "list_directory":
 						if pathAny, exists := args["path"]; exists {
 							if pathStr, ok := pathAny.(string); ok && pathStr != "" {
 								agent.lastPath = pathStr
 							}
 						}
-						return tools.ListDirectory(agent.lastPath), nil
+						return agent.registry.ListDirectory(ctx, tools.ListDirectoryArgs{Path: agent.lastPath})
 					default:
 						return fmt.Sprintf("Error: Unknown function %s called.", funcCall.Name), nil
 					}

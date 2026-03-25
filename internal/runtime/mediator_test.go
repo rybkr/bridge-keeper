@@ -8,6 +8,8 @@ import (
 
 	"bridgekeeper/internal/audit"
 	"bridgekeeper/internal/policy"
+	"bridgekeeper/internal/redact"
+	"bridgekeeper/internal/sandbox"
 	"bridgekeeper/internal/types"
 )
 
@@ -102,5 +104,36 @@ func TestMediatorExecute_AskAndDeny(t *testing.T) {
 	}
 	if !strings.Contains(result, "request denied by approver") {
 		t.Fatalf("unexpected result %q", result)
+	}
+}
+
+func TestMediatorExecute_RedactsSensitiveOutput(t *testing.T) {
+	validator, err := sandbox.NewValidator("/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pf := &policy.PolicyFile{
+		Default: "allow",
+	}
+	mediator := &Mediator{
+		Policy:   policy.NewEngine(pf),
+		Audit:    audit.NewLogger(&bytes.Buffer{}, audit.Info),
+		Sandbox:  validator,
+		Redactor: redact.New(),
+	}
+
+	result, err := mediator.Execute(context.Background(), types.ToolCall{
+		ID:     "4",
+		Tool:   "pkg",
+		Action: "list",
+	}, func(context.Context, map[string]any) (string, error) {
+		return "token=supersecret", nil
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if strings.Contains(result, "supersecret") {
+		t.Fatalf("expected secret to be redacted, got %q", result)
 	}
 }

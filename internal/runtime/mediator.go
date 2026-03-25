@@ -6,6 +6,9 @@ import (
 
 	"bridgekeeper/internal/audit"
 	"bridgekeeper/internal/policy"
+	"bridgekeeper/internal/redact"
+	"bridgekeeper/internal/sandbox"
+	"bridgekeeper/internal/taint"
 	"bridgekeeper/internal/types"
 )
 
@@ -22,6 +25,8 @@ type Mediator struct {
 	Policy   *policy.Engine
 	Approver Approver
 	Audit    *audit.Logger
+	Sandbox  *sandbox.Validator
+	Redactor *redact.Redactor
 }
 
 // Execute evaluates policy, optionally requests approval, audits the outcome,
@@ -34,10 +39,26 @@ func (m *Mediator) Execute(ctx context.Context, call types.ToolCall, handler Han
 		return "", fmt.Errorf("tool handler is not configured")
 	}
 
+	call, err := m.validateCall(call)
+	if err != nil {
+		m.Audit.Log(audit.Warning, "tool_call_rejected_by_sandbox", map[string]any{
+			"id":     call.ID,
+			"tool":   call.Tool,
+			"action": call.Action,
+			"error":  err.Error(),
+		})
+		return denied(types.PolicyDecision{
+			Decision: types.Deny,
+			Rule:     "sandbox",
+			Reason:   err.Error(),
+		}), nil
+	}
+
 	m.Audit.Log(audit.Info, "tool_call_received", map[string]any{
 		"id":     call.ID,
 		"tool":   call.Tool,
 		"action": call.Action,
+		"args":   m.redactValue(call.Args),
 	})
 
 	decision := m.Policy.Evaluate(ctx, call)
@@ -103,15 +124,63 @@ func (m *Mediator) Execute(ctx context.Context, call types.ToolCall, handler Han
 		})
 		return "", err
 	}
+	if err := m.validateResult(result); err != nil {
+		m.Audit.Log(audit.Warning, "tool_result_rejected_by_sandbox", map[string]any{
+			"id":     call.ID,
+			"tool":   call.Tool,
+			"action": call.Action,
+			"error":  err.Error(),
+		})
+		return denied(types.PolicyDecision{
+			Decision: types.Deny,
+			Rule:     "sandbox",
+			Reason:   err.Error(),
+		}), nil
+	}
+
+	classification := taint.Detect(result)
+	safeResult := result
+	if classification.Sensitive {
+		safeResult = m.redactText(result)
+	}
 
 	m.Audit.Log(audit.Info, "tool_execution_succeeded", map[string]any{
 		"id":     call.ID,
 		"tool":   call.Tool,
 		"action": call.Action,
+		"taint":  classification,
 	})
-	return result, nil
+	return safeResult, nil
 }
 
 func denied(decision types.PolicyDecision) string {
 	return fmt.Sprintf("Error: execution denied. Reason: %s", decision.Reason)
+}
+
+func (m *Mediator) validateCall(call types.ToolCall) (types.ToolCall, error) {
+	if m == nil || m.Sandbox == nil {
+		return call, nil
+	}
+	return m.Sandbox.ValidateToolCall(call)
+}
+
+func (m *Mediator) validateResult(result string) error {
+	if m == nil || m.Sandbox == nil {
+		return nil
+	}
+	return m.Sandbox.ValidateToolResult(result)
+}
+
+func (m *Mediator) redactText(text string) string {
+	if m == nil || m.Redactor == nil {
+		return text
+	}
+	return m.Redactor.RedactText(text)
+}
+
+func (m *Mediator) redactValue(value any) any {
+	if m == nil || m.Redactor == nil {
+		return value
+	}
+	return m.Redactor.RedactValue(value)
 }

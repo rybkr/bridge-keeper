@@ -8,48 +8,22 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
 	"bridgekeeper/internal/audit"
-	"bridgekeeper/internal/engine"
 	"bridgekeeper/internal/hitl"
 	"bridgekeeper/internal/policy"
+	"bridgekeeper/internal/redact"
 	"bridgekeeper/internal/runtime"
+	"bridgekeeper/internal/sandbox"
+	"bridgekeeper/internal/tools"
 
 	"github.com/joho/godotenv"
 )
 
 /////// Toolchain placeholders ///////
-
-func handleGoVersion(_ context.Context, args map[string]any) (string, error) {
-	// TODO: Replace with better result structs
-	// or exec or something
-	return "go version go1.25.7 linux/amd64", nil
-}
-
-func handleRustVersion(_ context.Context, args map[string]any) (string, error) {
-	// TODO: Replace with better result structs
-	// or exec or something
-	return "cargo 1.65.0", nil
-}
-
-var toolchain = []runtime.ToolDef{
-	{
-		Name:        "go_version",
-		Tool:        "pkg",
-		Action:      "list",
-		Description: "Get the current version of go",
-		Handler:     handleGoVersion,
-	},
-	{
-		Name:        "rust_version",
-		Tool:        "pkg",
-		Action:      "list",
-		Description: "Get the current version of Rust",
-		Handler:     handleRustVersion,
-	},
-}
 
 // / Deferred shutdown ///
 func deferredShutdown() {
@@ -71,14 +45,14 @@ func loadGeminiAPIKey() string {
 	return apiKey
 }
 
-func runGeminiModel(mediator *runtime.Mediator) {
+func runGeminiModel(mediator *runtime.Mediator, registry *tools.Registry) {
 	ctx := context.Background()
 	var conciseMode bool = true
 
 	apiKey := loadGeminiAPIKey()
 
 	// Initialize the Gemini Agent
-	agent := createDefaultGeminiAgent(ctx, apiKey, mediator)
+	agent := createDefaultGeminiAgent(ctx, apiKey, mediator, registry)
 
 	// Start the CLI interactive loop
 	reader := bufio.NewReader(os.Stdin)
@@ -150,12 +124,6 @@ func main() {
 	mode := flag.String("mode", "", "mode to run the agent in (ollama or gemini)")
 	flag.Parse()
 
-	cfg := engine.Config{
-		PolicyDir: *policyPath,
-		LogFile:   *logFile,
-		Verbose:   *verbose,
-	}
-
 	pf, err := policy.LoadPath(*policyPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: loading policy path: %v\n", err)
@@ -177,6 +145,23 @@ func main() {
 		auditWriter = os.Stderr
 	}
 	auditLogger := audit.NewLogger(auditWriter, audit.Info)
+
+	workspaceRoot, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: cannot determine working directory: %v\n", err)
+		os.Exit(1)
+	}
+	workspaceRoot, err = filepath.Abs(workspaceRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: cannot resolve working directory: %v\n", err)
+		os.Exit(1)
+	}
+	validator, err := sandbox.NewValidator(workspaceRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: cannot initialize sandbox validator: %v\n", err)
+		os.Exit(1)
+	}
+	registry := tools.NewRegistry(workspaceRoot, validator)
 
 	// Set up approver.
 	var approver runtime.Approver
@@ -203,23 +188,14 @@ func main() {
 		<-sigCh
 		cancel()
 	}()
-
-	// Create and run engine.
-	eng, err := engine.New(cfg, os.Stdin, os.Stdout, auditWriter, approver)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := eng.Run(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
 	mediator := &runtime.Mediator{
 		Policy:   policyEngine,
 		Approver: approver,
 		Audit:    auditLogger,
+		Sandbox:  validator,
+		Redactor: redact.New(),
 	}
+	toolchain := runtimeVersionTools(registry)
 
 	if *mode == "" {
 		fmt.Println("Invalid selection please select Gemini or Ollama with --mode flag.")
@@ -227,6 +203,9 @@ func main() {
 	}
 
 	auditLogger.Log(audit.Info, "runtime_started", map[string]any{"mode": *mode})
+	if *verbose {
+		fmt.Fprintf(os.Stderr, "bridgekeeper: workspace root %s\n", workspaceRoot)
+	}
 
 	switch *mode {
 
@@ -262,10 +241,33 @@ func main() {
 	case "gemini", "Gemini":
 		/////// GEMINI ///////
 		// This actually runs as a chat
-		runGeminiModel(mediator)
+		runGeminiModel(mediator, registry)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Usage: %s --mode <ollama|gemini>\n", os.Args[0])
 		os.Exit(1)
+	}
+}
+
+func runtimeVersionTools(registry *tools.Registry) []runtime.ToolDef {
+	return []runtime.ToolDef{
+		{
+			Name:        "go_version",
+			Tool:        "pkg",
+			Action:      "list",
+			Description: "Get the current version of Go.",
+			Handler: func(ctx context.Context, _ map[string]any) (string, error) {
+				return registry.GoVersion(ctx)
+			},
+		},
+		{
+			Name:        "rust_version",
+			Tool:        "pkg",
+			Action:      "list",
+			Description: "Get the current version of Rust.",
+			Handler: func(ctx context.Context, _ map[string]any) (string, error) {
+				return registry.RustVersion(ctx)
+			},
+		},
 	}
 }

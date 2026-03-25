@@ -5,6 +5,7 @@ BIN_DIR ?= bin
 GOCACHE ?= /tmp/bridgekeeper-go-cache
 GO_TEST = GOCACHE=$(GOCACHE) $(GO) test
 GO_BUILD = GOCACHE=$(GOCACHE) $(GO) build
+GO_VET = GOCACHE=$(GOCACHE) $(GO) vet
 
 BRIDGEKEEPER_BIN := $(BIN_DIR)/bridgekeeper
 POLICYCHECK_BIN := $(BIN_DIR)/policycheck
@@ -32,7 +33,7 @@ fmtcheck:
 ## Run go vet
 .PHONY: lint
 lint:
-	$(GO) vet ./...
+	$(GO_VET) ./...
 
 ## Run all tests
 .PHONY: test
