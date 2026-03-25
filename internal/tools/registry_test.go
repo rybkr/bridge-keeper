@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"bridgekeeper/internal/sandbox"
 )
@@ -53,5 +54,80 @@ func TestListDirectory(t *testing.T) {
 	}
 	if !strings.Contains(got, "a.txt") || !strings.Contains(got, "sub"+string(filepath.Separator)) {
 		t.Fatalf("ListDirectory() output missing expected entries: %q", got)
+	}
+}
+
+func TestRunSubprocess_Timeout(t *testing.T) {
+	validator, err := sandbox.NewValidator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(t.TempDir(), validator)
+
+	_, err = registry.runSubprocess(context.Background(), subprocessSpec{
+		name:      "python3",
+		args:      []string{"-c", "import time; time.sleep(1)"},
+		timeout:   20 * time.Millisecond,
+		maxOutput: 1024,
+	})
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected timeout error, got %v", err)
+	}
+}
+
+func TestRunSubprocess_OutputLimit(t *testing.T) {
+	validator, err := sandbox.NewValidator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(t.TempDir(), validator)
+
+	_, err = registry.runSubprocess(context.Background(), subprocessSpec{
+		name:      "python3",
+		args:      []string{"-c", "print('x' * 2000)"},
+		timeout:   time.Second,
+		maxOutput: 128,
+	})
+	if err == nil || !strings.Contains(err.Error(), "output exceeded") {
+		t.Fatalf("expected output limit error, got %v", err)
+	}
+}
+
+func TestRunSubprocess_PreservesLeadingWhitespace(t *testing.T) {
+	validator, err := sandbox.NewValidator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(t.TempDir(), validator)
+
+	got, err := registry.runSubprocess(context.Background(), subprocessSpec{
+		name:      "python3",
+		args:      []string{"-c", "print(' M file.txt', end='')"},
+		timeout:   time.Second,
+		maxOutput: 1024,
+	})
+	if err != nil {
+		t.Fatalf("runSubprocess() error = %v", err)
+	}
+	if got != " M file.txt" {
+		t.Fatalf("runSubprocess() = %q, want leading whitespace preserved", got)
+	}
+}
+
+func TestMinimalEnv_PreservesSSHAgentVars(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "/tmp/test-agent.sock")
+	t.Setenv("SSH_AGENT_PID", "1234")
+	t.Setenv("PATH", os.Getenv("PATH"))
+
+	env := minimalEnv([]string{"PATH", "SSH_AUTH_SOCK", "SSH_AGENT_PID"})
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "SSH_AUTH_SOCK=/tmp/test-agent.sock") {
+		t.Fatalf("expected SSH_AUTH_SOCK in env, got %v", env)
+	}
+	if !strings.Contains(joined, "SSH_AGENT_PID=1234") {
+		t.Fatalf("expected SSH_AGENT_PID in env, got %v", env)
+	}
+	if !strings.Contains(joined, "GIT_TERMINAL_PROMPT=0") {
+		t.Fatalf("expected GIT_TERMINAL_PROMPT=0 in env, got %v", env)
 	}
 }

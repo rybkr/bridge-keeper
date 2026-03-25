@@ -10,10 +10,12 @@ import (
 
 // Validator enforces runtime-local filesystem and payload constraints below policy.
 type Validator struct {
-	WorkspaceRoot  string
-	MaxOutputBytes int
-	MaxReadBytes   int64
-	MaxCommandArgs int
+	WorkspaceRoot          string
+	MaxOutputBytes         int
+	MaxReadBytes           int64
+	MaxCommandArgs         int
+	SubprocessTimeoutSecs  int
+	SubprocessEnvAllowlist []string
 }
 
 // NewValidator constructs a validator rooted at workspaceRoot.
@@ -28,10 +30,12 @@ func NewValidator(workspaceRoot string) (*Validator, error) {
 	}
 
 	return &Validator{
-		WorkspaceRoot:  filepath.Clean(root),
-		MaxOutputBytes: 64 * 1024,
-		MaxReadBytes:   64 * 1024,
-		MaxCommandArgs: 32,
+		WorkspaceRoot:          filepath.Clean(root),
+		MaxOutputBytes:         64 * 1024,
+		MaxReadBytes:           64 * 1024,
+		MaxCommandArgs:         32,
+		SubprocessTimeoutSecs:  5,
+		SubprocessEnvAllowlist: []string{"PATH", "HOME", "LANG", "LC_ALL", "TERM", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "SSH_ASKPASS"},
 	}, nil
 }
 
