@@ -1,4 +1,5 @@
 bridgekeeper
+policycheck
 
 *.exe
 *.exe~
@@ -21,3 +22,6 @@ bridgekeeper
 Thumbs.db
 
 vendor/
+
+.claude/
+.agents/
