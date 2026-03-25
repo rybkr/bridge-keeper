@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,6 +87,39 @@ func TestWriteFile(t *testing.T) {
 	if string(data) != "hello world" {
 		t.Fatalf("file content = %q, want hello world", string(data))
 	}
+}
+
+func TestHTTPGet(t *testing.T) {
+	validator, err := sandbox.NewValidator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(t.TempDir(), validator)
+	registry.HTTPClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       io.NopCloser(strings.NewReader("hello from server")),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	got, err := registry.HTTPGet(context.Background(), HTTPGetArgs{URL: "https://example.com/data"})
+	if err != nil {
+		t.Fatalf("HTTPGet() error = %v", err)
+	}
+	if got != "hello from server" {
+		t.Fatalf("HTTPGet() = %q, want hello from server", got)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestRunSubprocess_Timeout(t *testing.T) {

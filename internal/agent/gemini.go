@@ -176,6 +176,16 @@ func (agent *GeminiAgent) executeTool(ctx context.Context, name string, args map
 			return "Error: content argument must be a string.", nil
 		}
 		return agent.registry.WriteFile(ctx, tools.WriteFileArgs{Path: pathStr, Content: contentStr})
+	case "http_get":
+		urlAny, hasURL := args["url"]
+		if !hasURL {
+			return "Error: model failed to provide a URL.", nil
+		}
+		urlStr, ok := urlAny.(string)
+		if !ok || urlStr == "" {
+			return "Error: url argument is invalid or empty.", nil
+		}
+		return agent.registry.HTTPGet(ctx, tools.HTTPGetArgs{URL: urlStr})
 	case "list_directory":
 		if pathAny, exists := args["path"]; exists {
 			if pathStr, ok := pathAny.(string); ok && pathStr != "" {
@@ -243,6 +253,20 @@ func (agent *GeminiAgent) getChatConfig(conciseMode bool) *genai.GenerateContent
 				},
 			},
 			{
+				Name:        "http_get",
+				Description: "Fetches the contents of an HTTP or HTTPS URL. Use this for read-only network retrieval.",
+				Parameters: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"url": {
+							Type:        genai.TypeString,
+							Description: "The HTTP or HTTPS URL to fetch.",
+						},
+					},
+					Required: []string{"url"},
+				},
+			},
+			{
 				Name:        "list_directory",
 				Description: "Lists the contents of a specified directory. Use this to explore the repository structure, find files, or check for the presence of specific items.",
 				Parameters: &genai.Schema{
@@ -288,6 +312,8 @@ func geminiToolFamily(name string) string {
 	switch name {
 	case "execute_git_command":
 		return "git"
+	case "http_get":
+		return "http"
 	case "read_file", "write_file", "list_directory":
 		return "fs"
 	default:
@@ -308,6 +334,8 @@ func geminiActionName(name string, args map[string]any) string {
 		return "read_file"
 	case "write_file":
 		return "write_file"
+	case "http_get":
+		return "get"
 	case "list_directory":
 		return "list_dir"
 	default:

@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 
@@ -68,10 +69,39 @@ func (v *Validator) ValidateToolCall(call types.ToolCall) (types.ToolCall, error
 		if err := v.validateGitArgs(args); err != nil {
 			return call, err
 		}
+	case "http":
+		rawURL, err := v.urlArg(args, "url")
+		if err != nil {
+			return call, err
+		}
+		args["url"] = rawURL
 	}
 
 	call.Args = args
 	return call, nil
+}
+
+func (v *Validator) urlArg(args map[string]any, key string) (string, error) {
+	raw, ok := args[key]
+	if !ok {
+		return "", fmt.Errorf("%s is required", key)
+	}
+	value, ok := raw.(string)
+	if !ok || strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("%s must be a non-empty string", key)
+	}
+
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "", fmt.Errorf("%s is not a valid URL: %w", key, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("%s must use http or https", key)
+	}
+	if parsed.Hostname() == "" {
+		return "", fmt.Errorf("%s must include a host", key)
+	}
+	return parsed.String(), nil
 }
 
 func (v *Validator) validateContentSize(args map[string]any) error {

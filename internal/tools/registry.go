@@ -1,11 +1,16 @@
 package tools
 
-import "bridgekeeper/internal/sandbox"
+import (
+	"net/http"
+
+	"bridgekeeper/internal/sandbox"
+)
 
 // Registry holds typed tool implementations rooted in a workspace.
 type Registry struct {
 	WorkspaceRoot string
 	Validator     *sandbox.Validator
+	HTTPClient    *http.Client
 }
 
 // NewRegistry constructs a tool registry for a workspace root.
@@ -32,4 +37,8 @@ type WriteFileArgs struct {
 
 type ListDirectoryArgs struct {
 	Path string
+}
+
+type HTTPGetArgs struct {
+	URL string
 }

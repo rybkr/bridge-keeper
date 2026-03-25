@@ -79,3 +79,21 @@ func TestValidateToolCall_RejectsOversizedWriteContent(t *testing.T) {
 		t.Fatal("expected oversized write content error")
 	}
 }
+
+func TestValidateToolCall_RejectsInvalidHTTPURL(t *testing.T) {
+	validator, err := NewValidator("/tmp/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = validator.ValidateToolCall(types.ToolCall{
+		Tool:   "http",
+		Action: "get",
+		Args: map[string]any{
+			"url": "file:///etc/passwd",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected invalid URL scheme error")
+	}
+}
