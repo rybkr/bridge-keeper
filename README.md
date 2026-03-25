@@ -17,12 +17,12 @@ Current state:
 bridgekeeper/
 ├── cmd/bridgekeeper/       # CLI entrypoint
 ├── internal/
-│   ├── runtime/            # Core agent runtime loop
+│   ├── agent/              # Provider-specific agent adapters (Gemini, etc.)
+│   ├── runtime/            # Core mediation and runtime loop
 │   ├── policy/             # Policy engine and YAML loader
-│   ├── tools/              # Typed tool implementations and registry
+│   ├── tools/              # Typed tool implementations grouped by capability
 │   ├── sandbox/            # Workspace and payload validation below policy
-│   ├── redact/             # Secret redaction before audit/model handoff
-│   ├── taint/              # Sensitive-output classification heuristics
+│   ├── redact/             # Secret redaction and sensitivity classification
 │   ├── audit/              # Structured audit trail logging
 │   └── hitl/               # Human-in-the-loop approval
 ├── policies/               # YAML policy files

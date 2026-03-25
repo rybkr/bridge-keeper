@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	bkagent "bridgekeeper/internal/agent"
 	"bridgekeeper/internal/audit"
 	"bridgekeeper/internal/hitl"
 	"bridgekeeper/internal/policy"
@@ -52,7 +53,7 @@ func runGeminiModel(mediator *runtime.Mediator, registry *tools.Registry) {
 	apiKey := loadGeminiAPIKey()
 
 	// Initialize the Gemini Agent
-	agent := createDefaultGeminiAgent(ctx, apiKey, mediator, registry)
+	agent := bkagent.NewGeminiAgent(ctx, apiKey, mediator, registry)
 
 	// Start the CLI interactive loop
 	reader := bufio.NewReader(os.Stdin)
@@ -102,8 +103,8 @@ func runGeminiModel(mediator *runtime.Mediator, registry *tools.Registry) {
 	}
 }
 
-func getModelResponse(agent *GeminiAgent, ctx context.Context, input string, conciseMode bool) {
-	fmt.Printf("Thinking (%s)...\n", agent.currentModel)
+func getModelResponse(agent *bkagent.GeminiAgent, ctx context.Context, input string, conciseMode bool) {
+	fmt.Printf("Thinking (%s)...\n", agent.CurrentModel())
 
 	// Uses the new autonomous execution loop
 	response, err := agent.SendMessageWithTools(ctx, input, conciseMode)
@@ -113,6 +114,49 @@ func getModelResponse(agent *GeminiAgent, ctx context.Context, input string, con
 	}
 
 	fmt.Println("\n(Gemini) - " + response + "\n")
+}
+
+func printGeminiCommands(agent *bkagent.GeminiAgent) {
+	fmt.Println("--- BridgeKeeper Gemini ---")
+	fmt.Printf("Current Model: %s\n", agent.CurrentModel())
+	fmt.Println("Commands:")
+	fmt.Println("  /help          - Show this help message")
+	fmt.Println("  /list          - List available models")
+	fmt.Println("  /model <name>  - Select a model (e.g., /model gemini-1.5-pro)")
+	fmt.Println("  /concise       - Toggle the verboseness of the Model")
+	fmt.Println("  <your prompt>  - Chat with the AI (Auto-Tools Enabled)")
+	fmt.Println("  /exit          - Quit")
+	fmt.Println("-------------------------------")
+}
+
+func fetchGeminiModels(agent *bkagent.GeminiAgent, ctx context.Context) {
+	fmt.Println("Fetching available models...")
+	models, err := agent.ListModels(ctx)
+	if err != nil {
+		log.Printf("Error listing models: %v\n", err)
+		return
+	}
+	for _, model := range models {
+		fmt.Println("- " + bkagent.TrimModelName(model))
+	}
+}
+
+func selectGeminiModel(agent *bkagent.GeminiAgent, parts []string) {
+	if len(parts) < 2 {
+		fmt.Println("Usage: /model <model_name>")
+		return
+	}
+	agent.SetModel(parts[1])
+	fmt.Printf("Model changed to: %s\n", agent.CurrentModel())
+}
+
+func toggleGeminiConciseness(conciseMode *bool) {
+	*conciseMode = !*conciseMode
+	if *conciseMode {
+		fmt.Println("The model will respond in a more direct manner.")
+	} else {
+		fmt.Println("The model will respond in a more verbose manner.")
+	}
 }
 
 // ///// MAIN ///////

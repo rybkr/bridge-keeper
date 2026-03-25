@@ -8,7 +8,6 @@ import (
 	"bridgekeeper/internal/policy"
 	"bridgekeeper/internal/redact"
 	"bridgekeeper/internal/sandbox"
-	"bridgekeeper/internal/taint"
 	"bridgekeeper/internal/types"
 )
 
@@ -138,7 +137,7 @@ func (m *Mediator) Execute(ctx context.Context, call types.ToolCall, handler Han
 		}), nil
 	}
 
-	classification := taint.Detect(result)
+	classification := m.detect(result)
 	safeResult := result
 	if classification.Sensitive {
 		safeResult = m.redactText(result)
@@ -183,4 +182,11 @@ func (m *Mediator) redactValue(value any) any {
 		return value
 	}
 	return m.Redactor.RedactValue(value)
+}
+
+func (m *Mediator) detect(text string) redact.Classification {
+	if m == nil || m.Redactor == nil {
+		return redact.Classification{}
+	}
+	return m.Redactor.Detect(text)
 }
