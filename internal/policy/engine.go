@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 
@@ -112,6 +113,7 @@ func checkConstraints(c *Constraints, call types.ToolCall) (string, bool) {
 	if c.Paths != nil {
 		if rawPath, ok := call.Args["path"]; ok {
 			path, _ := rawPath.(string)
+			path = normalizePath(path)
 			if msg, ok := checkAllowDenyGlob(c.Paths, path, "path"); !ok {
 				return msg, false
 			}
@@ -359,19 +361,11 @@ func extractDomain(args map[string]any) string {
 // importing net/url — we only need to strip the scheme and path.
 // e.g. "https://api.example.com/v1" → "api.example.com"
 func hostFromURL(rawURL string) string {
-	// Strip scheme.
-	if i := strings.Index(rawURL, "://"); i >= 0 {
-		rawURL = rawURL[i+3:]
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
 	}
-	// Strip path, query, fragment.
-	if i := strings.IndexAny(rawURL, "/?#"); i >= 0 {
-		rawURL = rawURL[:i]
-	}
-	// Strip port.
-	if i := strings.LastIndex(rawURL, ":"); i >= 0 {
-		rawURL = rawURL[:i]
-	}
-	return rawURL
+	return parsed.Hostname()
 }
 
 // checkDomain applies an AllowDeny rule to a domain value.
@@ -420,4 +414,11 @@ func matchDomain(pattern, domain string) bool {
 	}
 
 	return pattern == domain
+}
+
+func normalizePath(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return path
+	}
+	return filepath.Clean(path)
 }

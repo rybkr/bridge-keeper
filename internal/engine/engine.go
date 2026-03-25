@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bridgekeeper/internal/runtime"
 	"context"
 	"io"
 	"log"
@@ -14,21 +15,17 @@ type Config struct {
 }
 
 // Approver defines the interface for Human-In-The-Loop (HITL) approvals.
-type Approver interface {
-	// Add specific approval methods here later (e.g., ApproveToolCall)
-}
-
 // Engine represents the higher-level orchestration engine (distinct from the policy engine).
 type Engine struct {
 	config   Config
 	in       io.Reader
 	out      io.Writer
 	auditLog io.Writer
-	approver Approver
+	approver runtime.Approver
 }
 
 // New creates a new instance of the Engine.
-func New(cfg Config, in io.Reader, out io.Writer, auditLog io.Writer, approver Approver) (*Engine, error) {
+func New(cfg Config, in io.Reader, out io.Writer, auditLog io.Writer, approver runtime.Approver) (*Engine, error) {
 	return &Engine{
 		config:   cfg,
 		in:       in,

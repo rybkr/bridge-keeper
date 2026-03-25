@@ -1,8 +1,6 @@
 package runtime
 
 import (
-	"bridgekeeper/internal/audit"
-	"bridgekeeper/internal/policy"
 	"bufio"
 	"bytes"
 	"context"
@@ -91,12 +89,14 @@ type ToolProperty struct {
 type ToolDef struct {
 	// Must match function name the model wants to call
 	Name        string
+	Tool        string
+	Action      string
 	Description string
 	Parameters  map[string]ToolProperty
 
 	// determines which parameter names must be used
 	Required []string
-	Handler  func(args map[string]any) (string, error) // called with arguments chosen by the model
+	Handler  Handler // called with arguments chosen by the model
 }
 
 /////// Utility Functions ///////
@@ -272,7 +272,7 @@ func Query(userPrompt string) (string, error) {
 	return chatStream(messages, nil)
 }
 
-func QueryWithTools(userPrompt string, tools []ToolDef, eng *policy.Engine) (string, error) {
+func QueryWithTools(ctx context.Context, userPrompt string, tools []ToolDef, mediator *Mediator) (string, error) {
 
 	// Force initialize to run first
 	if baseURL == "" {
@@ -281,11 +281,11 @@ func QueryWithTools(userPrompt string, tools []ToolDef, eng *policy.Engine) (str
 
 	// this one is ai magic tbh
 	toolset := make([]tool, len(tools))
-	handlers := make(map[string]func(map[string]any) (string, error), len(tools))
+	defs := make(map[string]ToolDef, len(tools))
 
 	for i, toold := range tools {
 		toolset[i] = toold.ollamaJsonFormat()
-		handlers[toold.Name] = toold.Handler
+		defs[toold.Name] = toold
 	}
 
 	// First need to send prompt and tool schema
@@ -304,38 +304,21 @@ func QueryWithTools(userPrompt string, tools []ToolDef, eng *policy.Engine) (str
 	tcall := llmResponse.ToolCalls[0]
 
 	// Map Ollama tool call to our internal types.ToolCall structure
+	def, ok := defs[tcall.Function.Name]
+	if !ok {
+		return "", fmt.Errorf("tool %q unknown", tcall.Function.Name)
+	}
+
 	toolCall := types.ToolCall{
 		ID:     "ollama-internal",
-		Tool:   "pkg", // Depending on the handlers, mapping to an existing tool category
-		Action: tcall.Function.Name,
+		Tool:   def.Tool,
+		Action: def.Action,
 		Args:   tcall.Function.Arguments,
 	}
 
-	ndjsonBytes, _ := json.Marshal(toolCall)
-	fmt.Printf("\n[POLICY ENG] Intercepted NDJSON: %s\n", string(ndjsonBytes))
-	audit.LogEvent(fmt.Sprintf("Ollama tool call intercepted: %s", string(ndjsonBytes)), audit.Info)
-
-	// Evaluate against the Policy Engine
-	decision := eng.Evaluate(context.Background(), toolCall)
-	fmt.Printf("[POLICY ENG] Decision: %s (Reason: %s)\n", decision.Decision, decision.Reason)
-	audit.LogEvent(fmt.Sprintf("Policy Decision: %s - %s", decision.Decision, decision.Reason), audit.Info)
-
-	var result string
-	if decision.Decision != types.Allow {
-		result = fmt.Sprintf("Error: Execution denied by policy. Reason: %s", decision.Reason)
-		audit.LogEvent("Execution bypassed. Returned policy rejection to Ollama.", audit.Warning)
-	} else {
-		handler, ok := handlers[tcall.Function.Name]
-		if !ok {
-			return "", fmt.Errorf("Tool %q unknown", tcall.Function.Name)
-		}
-
-		audit.LogEvent(fmt.Sprintf("Execution allowed. Running tool: %s", tcall.Function.Name), audit.Info)
-		var err error
-		result, err = handler(tcall.Function.Arguments)
-		if nil != err {
-			return "", fmt.Errorf("Tool %q returned bad %w", tcall.Function.Name, err)
-		}
+	result, err := mediator.Execute(ctx, toolCall, def.Handler)
+	if err != nil {
+		return "", fmt.Errorf("tool %q execution failed: %w", tcall.Function.Name, err)
 	}
 
 	// Mush assistant and tool messages together

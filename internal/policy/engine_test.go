@@ -505,3 +505,55 @@ func TestEvaluate_TimeoutSecondsConstraint(t *testing.T) {
 		}
 	})
 }
+
+func TestEvaluate_PathTraversalGetsNormalizedBeforePolicy(t *testing.T) {
+	pf := &PolicyFile{
+		Default: "deny",
+		Capabilities: []Capability{
+			{
+				Name:     "guarded-write",
+				Tool:     "fs",
+				Actions:  []string{"write_file"},
+				Decision: "allow",
+				Constraints: &Constraints{
+					Paths: &AllowDeny{
+						Deny: []string{"/etc/**"},
+					},
+				},
+			},
+		},
+	}
+
+	got := makeEngine(pf).Evaluate(context.Background(), call("fs", "write_file", map[string]any{
+		"path": "/tmp/../etc/passwd",
+	}))
+	if got.Decision != types.Deny {
+		t.Fatalf("want Deny after path normalization, got %q", got.Decision)
+	}
+}
+
+func TestEvaluate_DomainParsingUsesURLHostname(t *testing.T) {
+	pf := &PolicyFile{
+		Default: "deny",
+		Capabilities: []Capability{
+			{
+				Name:     "http-get",
+				Tool:     "http",
+				Actions:  []string{"get"},
+				Decision: "allow",
+				Constraints: &Constraints{
+					Domains: &AllowDeny{
+						Deny: []string{"evil.example"},
+					},
+				},
+			},
+		},
+	}
+
+	got := makeEngine(pf).Evaluate(context.Background(), call("http", "get", map[string]any{
+		"url": "https://user:pass@evil.example:8443/path?q=1",
+	}))
+	if got.Decision != types.Deny {
+		t.Fatalf("want Deny after hostname extraction, got %q", got.Decision)
+	}
+}

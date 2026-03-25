@@ -22,13 +22,13 @@ import (
 
 /////// Toolchain placeholders ///////
 
-func handleGoVersion(args map[string]any) (string, error) {
+func handleGoVersion(_ context.Context, args map[string]any) (string, error) {
 	// TODO: Replace with better result structs
 	// or exec or something
 	return "go version go1.25.7 linux/amd64", nil
 }
 
-func handleRustVersion(args map[string]any) (string, error) {
+func handleRustVersion(_ context.Context, args map[string]any) (string, error) {
 	// TODO: Replace with better result structs
 	// or exec or something
 	return "cargo 1.65.0", nil
@@ -37,11 +37,15 @@ func handleRustVersion(args map[string]any) (string, error) {
 var toolchain = []runtime.ToolDef{
 	{
 		Name:        "go_version",
+		Tool:        "pkg",
+		Action:      "list",
 		Description: "Get the current version of go",
 		Handler:     handleGoVersion,
 	},
 	{
 		Name:        "rust_version",
+		Tool:        "pkg",
+		Action:      "list",
 		Description: "Get the current version of Rust",
 		Handler:     handleRustVersion,
 	},
@@ -67,14 +71,14 @@ func loadGeminiAPIKey() string {
 	return apiKey
 }
 
-func runGeminiModel(eng *policy.Engine) {
+func runGeminiModel(mediator *runtime.Mediator) {
 	ctx := context.Background()
 	var conciseMode bool = true
 
 	apiKey := loadGeminiAPIKey()
 
 	// Initialize the Gemini Agent
-	agent := createDefaultGeminiAgent(ctx, apiKey, eng)
+	agent := createDefaultGeminiAgent(ctx, apiKey, mediator)
 
 	// Start the CLI interactive loop
 	reader := bufio.NewReader(os.Stdin)
@@ -91,8 +95,6 @@ func runGeminiModel(eng *policy.Engine) {
 		if input == "" {
 			continue
 		}
-
-		audit.LogEvent("User input received: "+input, audit.Info)
 
 		// Handle commands vs. prompts
 		if strings.HasPrefix(input, "/") {
@@ -141,8 +143,6 @@ func getModelResponse(agent *GeminiAgent, ctx context.Context, input string, con
 
 // ///// MAIN ///////
 func main() {
-	audit.LogEvent("This is a test", audit.Debug)
-
 	policyPath := flag.String("policy", "policies", "path to policy YAML file or directory")
 	logFile := flag.String("log-file", "", "audit log file path (default: stderr)")
 	verbose := flag.Bool("verbose", false, "enable verbose output")
@@ -155,6 +155,13 @@ func main() {
 		LogFile:   *logFile,
 		Verbose:   *verbose,
 	}
+
+	pf, err := policy.LoadPath(*policyPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: loading policy path: %v\n", err)
+		os.Exit(1)
+	}
+	policyEngine := policy.NewEngine(pf)
 
 	// Set up audit log writer.
 	var auditWriter *os.File
@@ -169,9 +176,10 @@ func main() {
 	} else {
 		auditWriter = os.Stderr
 	}
+	auditLogger := audit.NewLogger(auditWriter, audit.Info)
 
 	// Set up approver.
-	var approver engine.Approver
+	var approver runtime.Approver
 	if *noHITL {
 		approver = &hitl.AutoApprover{}
 	} else {
@@ -207,24 +215,18 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-
-	if *policyPath != "" {
-		*policyPath = "../../policies/default.yaml"
+	mediator := &runtime.Mediator{
+		Policy:   policyEngine,
+		Approver: approver,
+		Audit:    auditLogger,
 	}
-
-	pf, err := policy.LoadPath(*policyPath)
-	if err != nil {
-		log.Printf("\n[WARNING] Could not load policy files: %v", err)
-		pf = &policy.PolicyFile{}
-	}
-	directEngine := policy.NewEngine(pf)
 
 	if *mode == "" {
 		fmt.Println("Invalid selection please select Gemini or Ollama with --mode flag.")
 		os.Exit(1)
 	}
 
-	audit.LogEvent(fmt.Sprintf("System initialized. Entering %s mode.", *mode), audit.Info)
+	auditLogger.Log(audit.Info, "runtime_started", map[string]any{"mode": *mode})
 
 	switch *mode {
 
@@ -248,11 +250,10 @@ func main() {
 		// send the list of prompts
 		for _, prompt := range prompts {
 			fmt.Printf("\n> %s\n", prompt)
-			audit.LogEvent("Sending Ollama Prompt: "+prompt, audit.Info)
-			response, err := runtime.QueryWithTools(prompt, toolchain, directEngine)
+			response, err := runtime.QueryWithTools(ctx, prompt, toolchain, mediator)
 			if nil != err {
 				log.Printf("Query error %v", err)
-				audit.LogEvent(fmt.Sprintf("Ollama Query Error: %v", err), audit.Error)
+				auditLogger.Log(audit.Error, "ollama_query_error", map[string]any{"error": err.Error()})
 				continue // attempt other prompts
 			}
 			fmt.Printf("< %s\n", response)
@@ -261,7 +262,7 @@ func main() {
 	case "gemini", "Gemini":
 		/////// GEMINI ///////
 		// This actually runs as a chat
-		runGeminiModel(directEngine)
+		runGeminiModel(mediator)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Usage: %s --mode <ollama|gemini>\n", os.Args[0])

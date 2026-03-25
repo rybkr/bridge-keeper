@@ -1,21 +1,18 @@
 package audit
 
 import (
-	"fmt"
-	"os"
-	"runtime"
-	"strings"
+	"encoding/json"
+	"io"
+	"sync"
 	"time"
 )
 
-////////////////////  Types and globals  ////////////////////
-
-// Severity as a typed int and implement the Stringer interface
+// Severity is a stable audit severity label.
 type Severity int
 
 const (
-	Debug Severity = iota // Most verbose
-	Info                  // Default
+	Debug Severity = iota
+	Info
 	Warning
 	Error
 )
@@ -24,77 +21,49 @@ func (s Severity) String() string {
 	return [...]string{"DEBUG", "INFO", "WARN", "ERROR"}[s]
 }
 
-// System shared severity level
-var systemLogLevel Severity = Info
+// Event is a structured audit record written as JSONL.
+type Event struct {
+	Time     string         `json:"time"`
+	Severity string         `json:"severity"`
+	Message  string         `json:"message"`
+	Fields   map[string]any `json:"fields,omitempty"`
+}
 
-// Log file should be open for whole runtime
-var logFile *os.File
+// Logger writes structured audit events to an injected writer.
+type Logger struct {
+	mu       sync.Mutex
+	out      io.Writer
+	minLevel Severity
+}
 
-// //////////////////  Initialization  ////////////////////
-// Runs at the beginning of module lifetime in program
-func init() {
-	err := os.MkdirAll("./logs", 0755)
-	if err != nil {
-		return
-	}
-	// path to log file                                     // YYYY-MM-DD
-	path := fmt.Sprintf("./logs/%s-log.md", time.Now().Format("2006-01-02-15-04-05"))
-
-	// Check if the file exists before trying to open
-	_, stat := os.Stat(path)
-	isNewFile := os.IsNotExist(stat)
-
-	// Open the file, creating if it doesn't exist, in write-only append mode
-	logFile, err = os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-
-	// Add a header if new
-	if isNewFile {
-		logFile.WriteString(fmt.Sprintf("# Log — %s\n\n| Time | Module | Function | Severity | Message |\n|------|--------|----------|----------|---------|\n", time.Now().Format("2006-01-02-15-04-05")))
+// NewLogger creates a structured logger. A nil writer produces a no-op logger.
+func NewLogger(out io.Writer, minLevel Severity) *Logger {
+	return &Logger{
+		out:      out,
+		minLevel: minLevel,
 	}
 }
 
-// //////////////////  Super awesome all in one log function  ////////////////////
-func LogEvent(message string, severity ...Severity) {
-
-	// Capture the time ASAP
-	eventTime := time.Now().Format("2006-01-02 15:04:05")
-
-	// determine severity to log at, and if it's too low, skip
-	thisSeverity := Info
-	if len(severity) > 0 {
-		thisSeverity = severity[0]
-	}
-	if thisSeverity < systemLogLevel || logFile == nil {
+// Log emits a JSONL audit event. Errors are intentionally ignored because audit
+// failures must not crash the runtime.
+func (l *Logger) Log(severity Severity, message string, fields map[string]any) {
+	if l == nil || l.out == nil || severity < l.minLevel {
 		return
 	}
 
-	// runtime.Caller(1) will get the caller module
-	pc, rcFile, _, rcOk := runtime.Caller(1)
-	module, function := "unknown module", "unknown function"
-	if rcOk {
-		// Use the file name as the module name
-		base := rcFile[strings.LastIndex(rcFile, "/")+1:]
-		module = strings.TrimSuffix(base, ".go")
-
-		// FuncForPC returns "pkg.<name of function>"
-		if rcFunc := runtime.FuncForPC(pc); rcFunc != nil {
-			fullFuncName := rcFunc.Name()
-			// taking the last part for just the function name
-			function = fullFuncName[strings.LastIndex(fullFuncName, ".")+1:]
-		}
+	event := Event{
+		Time:     time.Now().UTC().Format(time.RFC3339Nano),
+		Severity: severity.String(),
+		Message:  message,
+		Fields:   fields,
 	}
 
-	// This creates a markdown table in the log
-	logEntry := fmt.Sprintf("| %s | %s | %s | %s | %s |\n",
-		eventTime,
-		module,
-		function,
-		thisSeverity,
-		strings.ReplaceAll(message, "|", "¦"), // replace line chars with broken line bc of markdown output
-	)
+	data, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
 
-	logFile.WriteString(logEntry)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, _ = l.out.Write(append(data, '\n'))
 }
