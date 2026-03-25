@@ -46,7 +46,7 @@ func loadGeminiAPIKey() string {
 	return apiKey
 }
 
-func runGeminiModel(mediator *runtime.Mediator, registry *tools.Registry) {
+func runGeminiModel(mediator *runtime.Mediator, registry *tools.Registry, pf *policy.PolicyFile) {
 	ctx := context.Background()
 	var conciseMode bool = true
 
@@ -92,6 +92,9 @@ func runGeminiModel(mediator *runtime.Mediator, registry *tools.Registry) {
 			case "/model":
 				selectGeminiModel(agent, parts)
 
+			case "/policy":
+				fmt.Println(policy.FormatPolicy(pf))
+
 			case "/concise":
 				toggleGeminiConciseness(&conciseMode)
 
@@ -134,6 +137,7 @@ func printGeminiCommands(agent *bkagent.GeminiAgent) {
 	fmt.Println("  /help          - Show this help message")
 	fmt.Println("  /list          - List available models")
 	fmt.Println("  /model <name>  - Select a model (e.g., /model gemini-1.5-pro)")
+	fmt.Println("  /policy        - Show the current loaded policy")
 	fmt.Println("  /concise       - Toggle the verboseness of the Model")
 	fmt.Println("  <your prompt>  - Chat with the AI (Auto-Tools Enabled)")
 	fmt.Println("  /exit          - Quit")
@@ -296,7 +300,7 @@ func main() {
 	case "gemini", "Gemini":
 		/////// GEMINI ///////
 		// This actually runs as a chat
-		runGeminiModel(mediator, registry)
+		runGeminiModel(mediator, registry, pf)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Usage: %s --mode <ollama|gemini>\n", os.Args[0])
