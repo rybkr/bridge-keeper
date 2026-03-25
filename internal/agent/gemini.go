@@ -161,6 +161,21 @@ func (agent *GeminiAgent) executeTool(ctx context.Context, name string, args map
 			return "Error: path argument is invalid or empty.", nil
 		}
 		return agent.registry.ReadFile(ctx, tools.ReadFileArgs{Path: pathStr})
+	case "write_file":
+		pathAny, hasPath := args["path"]
+		contentAny, hasContent := args["content"]
+		if !hasPath || !hasContent {
+			return "Error: model failed to provide file path or content.", nil
+		}
+		pathStr, ok := pathAny.(string)
+		if !ok || pathStr == "" {
+			return "Error: path argument is invalid or empty.", nil
+		}
+		contentStr, ok := contentAny.(string)
+		if !ok {
+			return "Error: content argument must be a string.", nil
+		}
+		return agent.registry.WriteFile(ctx, tools.WriteFileArgs{Path: pathStr, Content: contentStr})
 	case "list_directory":
 		if pathAny, exists := args["path"]; exists {
 			if pathStr, ok := pathAny.(string); ok && pathStr != "" {
@@ -210,6 +225,24 @@ func (agent *GeminiAgent) getChatConfig(conciseMode bool) *genai.GenerateContent
 				},
 			},
 			{
+				Name:        "write_file",
+				Description: "Writes text content to a local file. Use this only when the user explicitly wants to create or update a file.",
+				Parameters: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"path": {
+							Type:        genai.TypeString,
+							Description: "The absolute or relative path to the file to write.",
+						},
+						"content": {
+							Type:        genai.TypeString,
+							Description: "The text content to write to the file.",
+						},
+					},
+					Required: []string{"path", "content"},
+				},
+			},
+			{
 				Name:        "list_directory",
 				Description: "Lists the contents of a specified directory. Use this to explore the repository structure, find files, or check for the presence of specific items.",
 				Parameters: &genai.Schema{
@@ -255,7 +288,7 @@ func geminiToolFamily(name string) string {
 	switch name {
 	case "execute_git_command":
 		return "git"
-	case "read_file", "list_directory":
+	case "read_file", "write_file", "list_directory":
 		return "fs"
 	default:
 		return "unknown"
@@ -273,6 +306,8 @@ func geminiActionName(name string, args map[string]any) string {
 		return ""
 	case "read_file":
 		return "read_file"
+	case "write_file":
+		return "write_file"
 	case "list_directory":
 		return "list_dir"
 	default:

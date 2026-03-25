@@ -31,6 +31,13 @@ func (r *Registry) ReadFile(_ context.Context, req ReadFileArgs) (string, error)
 	return string(content), nil
 }
 
+func (r *Registry) WriteFile(_ context.Context, req WriteFileArgs) (string, error) {
+	if err := os.WriteFile(req.Path, []byte(req.Content), 0o644); err != nil {
+		return "", fmt.Errorf("write file: %w", err)
+	}
+	return fmt.Sprintf("Wrote %d bytes to %s", len(req.Content), req.Path), nil
+}
+
 func (r *Registry) ListDirectory(_ context.Context, req ListDirectoryArgs) (string, error) {
 	entries, err := os.ReadDir(req.Path)
 	if err != nil {

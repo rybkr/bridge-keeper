@@ -59,3 +59,23 @@ func TestValidateToolResult_RejectsLargeOutput(t *testing.T) {
 		t.Fatal("expected oversized result error")
 	}
 }
+
+func TestValidateToolCall_RejectsOversizedWriteContent(t *testing.T) {
+	validator, err := NewValidator("/tmp/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator.MaxWriteBytes = 4
+
+	_, err = validator.ValidateToolCall(types.ToolCall{
+		Tool:   "fs",
+		Action: "write_file",
+		Args: map[string]any{
+			"path":    "note.txt",
+			"content": "12345",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected oversized write content error")
+	}
+}

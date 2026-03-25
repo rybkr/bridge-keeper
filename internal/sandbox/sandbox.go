@@ -13,6 +13,7 @@ type Validator struct {
 	WorkspaceRoot          string
 	MaxOutputBytes         int
 	MaxReadBytes           int64
+	MaxWriteBytes          int64
 	MaxCommandArgs         int
 	SubprocessTimeoutSecs  int
 	SubprocessEnvAllowlist []string
@@ -33,6 +34,7 @@ func NewValidator(workspaceRoot string) (*Validator, error) {
 		WorkspaceRoot:          filepath.Clean(root),
 		MaxOutputBytes:         64 * 1024,
 		MaxReadBytes:           64 * 1024,
+		MaxWriteBytes:          64 * 1024,
 		MaxCommandArgs:         32,
 		SubprocessTimeoutSecs:  5,
 		SubprocessEnvAllowlist: []string{"PATH", "HOME", "LANG", "LC_ALL", "TERM", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "SSH_ASKPASS"},
@@ -53,6 +55,11 @@ func (v *Validator) ValidateToolCall(call types.ToolCall) (types.ToolCall, error
 			return call, err
 		}
 		args["path"] = path
+		if call.Action == "write_file" {
+			if err := v.validateContentSize(args); err != nil {
+				return call, err
+			}
+		}
 	case "git":
 		path, err := v.pathArg(args, "path")
 		if err == nil {
@@ -65,6 +72,26 @@ func (v *Validator) ValidateToolCall(call types.ToolCall) (types.ToolCall, error
 
 	call.Args = args
 	return call, nil
+}
+
+func (v *Validator) validateContentSize(args map[string]any) error {
+	if v.MaxWriteBytes <= 0 {
+		return nil
+	}
+
+	raw, ok := args["content"]
+	if !ok {
+		return fmt.Errorf("content is required")
+	}
+
+	content, ok := raw.(string)
+	if !ok {
+		return fmt.Errorf("content must be a string")
+	}
+	if int64(len(content)) > v.MaxWriteBytes {
+		return fmt.Errorf("content exceeds max write size of %d bytes", v.MaxWriteBytes)
+	}
+	return nil
 }
 
 // ValidateToolResult rejects unexpectedly large outputs.

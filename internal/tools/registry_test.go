@@ -57,6 +57,36 @@ func TestListDirectory(t *testing.T) {
 	}
 }
 
+func TestWriteFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "note.txt")
+
+	validator, err := sandbox.NewValidator(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	registry := NewRegistry(dir, validator)
+	got, err := registry.WriteFile(context.Background(), WriteFileArgs{
+		Path:    path,
+		Content: "hello world",
+	})
+	if err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if !strings.Contains(got, "Wrote 11 bytes") {
+		t.Fatalf("unexpected write result %q", got)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() after write error = %v", err)
+	}
+	if string(data) != "hello world" {
+		t.Fatalf("file content = %q, want hello world", string(data))
+	}
+}
+
 func TestRunSubprocess_Timeout(t *testing.T) {
 	validator, err := sandbox.NewValidator(t.TempDir())
 	if err != nil {

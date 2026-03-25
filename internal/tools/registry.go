@@ -25,6 +25,11 @@ type ReadFileArgs struct {
 	Path string
 }
 
+type WriteFileArgs struct {
+	Path    string
+	Content string
+}
+
 type ListDirectoryArgs struct {
 	Path string
 }
