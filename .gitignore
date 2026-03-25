@@ -1,4 +1,5 @@
-cmd/bridgekeeper/bridgekeeper
+bridgekeeper
+policycheck
 
 *.env
 
@@ -25,3 +26,6 @@ Thumbs.db
 
 vendor/
 *.swp
+
+.claude/
+.agents/
