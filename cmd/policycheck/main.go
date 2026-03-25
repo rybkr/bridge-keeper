@@ -114,7 +114,6 @@ func run(ctx context.Context, in io.Reader, out io.Writer, eng *policy.Engine) (
 func parseToolCallLine(line []byte) (types.ToolCall, error) {
 	var call types.ToolCall
 
-	// Shape 1: JSON-RPC tool_call request.
 	var req types.JSONRPCRequest
 	if err := json.Unmarshal(line, &req); err == nil && req.Method != "" {
 		if req.Method != "tool_call" {
@@ -127,7 +126,6 @@ func parseToolCallLine(line []byte) (types.ToolCall, error) {
 		return parsed, nil
 	}
 
-	// Shape 2: raw ToolCall object.
 	if err := json.Unmarshal(line, &call); err == nil {
 		if call.Tool != "" && call.Action != "" {
 			if call.ID == "" {
@@ -137,7 +135,6 @@ func parseToolCallLine(line []byte) (types.ToolCall, error) {
 		}
 	}
 
-	// Shape 3: wrapper object with a call field.
 	var wrapped struct {
 		Call types.ToolCall `json:"call"`
 	}
@@ -150,7 +147,6 @@ func parseToolCallLine(line []byte) (types.ToolCall, error) {
 		}
 	}
 
-	// Shape 4: fixture wrapper with a single request field.
 	var requestWrapped struct {
 		Request json.RawMessage `json:"request"`
 	}
@@ -162,7 +158,6 @@ func parseToolCallLine(line []byte) (types.ToolCall, error) {
 		return parsed, nil
 	}
 
-	// Shape 5: fixture wrapper with workflow array (use first request).
 	var workflowWrapped struct {
 		Workflow []json.RawMessage `json:"workflow"`
 	}
