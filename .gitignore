@@ -1,6 +1,6 @@
-cmd/bridgekeeper/bridgekeeper
-
 *.env
+bridgekeeper
+policycheck
 
 *.exe
 *.exe~
@@ -24,4 +24,10 @@ logs/*.md
 Thumbs.db
 
 vendor/
+<<<<<<< HEAD
 *.swp
+=======
+
+.claude/
+.agents/
+>>>>>>> rybkr/feature/policy
