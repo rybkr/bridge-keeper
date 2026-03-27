@@ -16,11 +16,11 @@ var goTool = OTool{
 			Type:     string(JSONObject),
 			Required: []string{"action"},
 			Properties: map[string]OFnPmPropts{
-				"action": OFnPmPropts{
+				"action": {
 					Type:        string(JSONString),
 					Description: "ONE of version, build, fmt, vet, mod",
 				},
-				"args": OFnPmPropts{
+				"args": {
 					Type:        string(JSONString),
 					Description: "Flags for the action, such as -o for build or -w for fmt",
 				},
@@ -38,11 +38,11 @@ var gitTool = OTool{
 			Type:     string(JSONObject),
 			Required: []string{"action"},
 			Properties: map[string]OFnPmPropts{
-				"action": OFnPmPropts{
+				"action": {
 					Type:        string(JSONString),
 					Description: "ONE of version, status, commit, add, branch, switch, pull, push, merge, rebase, stash, restore, mv, rm",
 				},
-				"args": OFnPmPropts{
+				"args": {
 					Type:        string(JSONString),
 					Description: "Flags specific to the action, such as --remote or --staged",
 				},
@@ -60,16 +60,16 @@ var writeFile = OTool{
 			Type:     string(JSONString),
 			Required: []string{"contents"},
 			Properties: map[string]OFnPmPropts{
-				"contents": OFnPmPropts{
+				"contents": {
 					Type:        string(JSONString),
 					Description: "Any text",
 				},
-				"--append": OFnPmPropts{
-					Type:        string(JSONTrue),
+				"--append": {
+					Type:        string(JSONBool),
 					Description: "Flag to indicate append mode. Overridden by --overwrite",
 				},
-				"--overwrite": OFnPmPropts{
-					Type:        string(JSONTrue),
+				"--overwrite": {
+					Type:        string(JSONBool),
 					Description: "(Default Behavior) Flag to indicate overwrite mode",
 				},
 			},

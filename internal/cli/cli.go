@@ -33,7 +33,7 @@ func CLILoop(eng *policy.Engine, mode string) error {
 	case "gemini", "Gemini":
 		apiKey = runtime.LoadGeminiAPIKey()
 		geminiAgent = runtime.CreateDefaultGeminiAgent(ctx, apiKey, eng)
-		modelstring = fmt.Sprintf("%s", geminiAgent)
+		modelstring = fmt.Sprintf("%s", geminiAgent.CurrentModel)
 		whichModel = true
 	default:
 		audit.LogEvent("Unknown mode selected.", audit.Error)
@@ -92,11 +92,11 @@ func CLILoop(eng *policy.Engine, mode string) error {
 				} else {
 					runtime.OllamaSelectModel(parts)
 				}
-				switch {
-				case mode == "ollama" || mode == "Ollama":
+				switch mode {
+				case "ollama", "Ollama":
 					modelstring = fmt.Sprintf("Ollama %s", runtime.OllamaSelectedModel)
-				case mode == "gemini" || mode == "Gemini":
-					modelstring = fmt.Sprintf("%s", geminiAgent)
+				case "gemini", "Gemini":
+					modelstring = fmt.Sprintf("%s", geminiAgent.CurrentModel)
 				}
 
 			case "/concise":

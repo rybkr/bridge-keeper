@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -17,7 +18,6 @@ import (
 
 var ollamaProc *exec.Cmd
 var baseURL string
-var conversation []OMessage
 var OllamaSelectedModel = ollamaPreferredModel
 
 // Functions
@@ -72,39 +72,48 @@ func serverStatus(base string) bool {
 func SendOllamaMessage(userPrompt string, eng *policy.Engine, ctx context.Context) error {
 	requestBody := OllamaAPIRequest{
 		Model: OllamaSelectedModel,
-		Messages: append(conversation, OMessage{
+		Messages: []OMessage{{
 			Role:    User,
 			Content: userPrompt,
-		}),
+		}},
 		Stream:    false,
 		Think:     false,
 		KeepAlive: ollamaModelKeepAlive,
 		Tools:     AvailableTools,
 	}
 	byteData, err := json.Marshal(requestBody)
+
+	audit.LogEvent(fmt.Sprintf("REQUEST: %s", string(byteData[:])), audit.Debug)
+
 	if nil != err {
 		return fmt.Errorf("Unable to marshal user request")
 	}
 
 	// the actual post call to the server
-	response, err := http.Post(baseURL+"/api/chat", "application/json", bytes.NewReader(byteData))
+	apiurl := baseURL + "/api/chat"
+	audit.LogEvent(fmt.Sprintf("URL: %s", apiurl), audit.Debug)
+	rspPtr, err := http.Post(apiurl, "application/json", bytes.NewReader(byteData))
+	// Someone online said this is better for cleanup
+	defer (*rspPtr).Body.Close()
+	response := *rspPtr
 	if nil != err {
 		return fmt.Errorf("HTTP POST failure %w", err)
 	}
 
-	// Someone online said this is better for cleanup
-	defer response.Body.Close()
-
 	// Check the response
+	audit.LogEvent(fmt.Sprintf("Response: %+v", response), audit.Debug)
 	if response.StatusCode != http.StatusOK {
+		audit.LogEvent(fmt.Sprintf("Response Not Ok: %+v", response), audit.Warning)
 		return fmt.Errorf("Unexpected Response %s", response.Status)
 	}
-	proposedOllamaCalls := OllamaResponse{}
-	json.Unmarshal(byteData, proposedOllamaCalls)
+
+	rspData, err := io.ReadAll(response.Body)
+	var rspBodyPtr *OllamaResponse = &OllamaResponse{}
+	json.Unmarshal(rspData, rspBodyPtr)
+	proposedOllamaCalls := *rspBodyPtr
+
 	audit.LogEvent("Ollama Diagnostics:", audit.Debug)
-	logmsg := fmt.Sprintf("%s %d %d %s", proposedOllamaCalls.CreatedAt, proposedOllamaCalls.PromptEvalCount, proposedOllamaCalls.EvalCount, proposedOllamaCalls.Message.Thinking)
-	audit.LogEvent(logmsg, audit.Debug)
-	fmt.Println(proposedOllamaCalls.Message.Content)
+	audit.LogEvent(fmt.Sprintf("%+v", proposedOllamaCalls), audit.Debug)
 	if len(proposedOllamaCalls.Message.ToolCalls) == 0 {
 		audit.LogEvent("No tool calls proposed.", audit.Warning)
 		return nil
@@ -115,7 +124,7 @@ func SendOllamaMessage(userPrompt string, eng *policy.Engine, ctx context.Contex
 	toolCall := types.ToolCall{
 		ID:     proposedOllamaCalls.Message.ToolCalls[0].ID,
 		Tool:   proposedOllamaCalls.Message.ToolCalls[0].Function.Name,
-		Action: action,
+		Action: fmt.Sprintf("%v", action),
 		Args:   args,
 	}
 
@@ -148,16 +157,13 @@ func SendOllamaMessage(userPrompt string, eng *policy.Engine, ctx context.Contex
 	return nil
 }
 
-func extractActionArgs(args map[string]any) (string, map[string]any) {
-	action := ""
+func extractActionArgs(args map[string]any) (any, map[string]any) {
+	var action any
 	rmap := map[string]any{}
-	first := true
 	for k := range args {
-		if first {
-			first = false
-			action = k
-		}
-		if !first {
+		if k == "action" {
+			action = args[k]
+		} else {
 			rmap[k] = args[k]
 		}
 	}
@@ -185,5 +191,5 @@ func OllamaLS() {
 }
 
 func OllamaSelectModel(parts []string) {
-	OllamaSelectedModel = parts[0]
+	OllamaSelectedModel = parts[1]
 }

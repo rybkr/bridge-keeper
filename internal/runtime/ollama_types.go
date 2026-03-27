@@ -16,8 +16,7 @@ const (
 	JSONObject JsonTypes = "object"
 	JSONNumber JsonTypes = "number"
 	JSONArray  JsonTypes = "array"
-	JSONTrue   JsonTypes = "true"
-	JSONFalse  JsonTypes = "false"
+	JSONBool   JsonTypes = "bool"
 	JSONNull   JsonTypes = "null"
 )
 
@@ -36,41 +35,46 @@ type OllamaAPIRequest struct {
 
 // The API Response
 type OllamaResponse struct {
-	Model              string   `json:"model"`
-	CreatedAt          string   `json:"created_at"`
-	Message            OMessage `json:"message"`
-	Done               bool     `json:"done"`
-	DoneReason         string   `json:"done_reason"`
-	TotalDuration      int      `json:"total_duration"`       // total time nanoseconds
-	LoadDuration       int      `json:"load_duration"`        // nanoseconds to load model
-	PromptEvalCount    int      `json:"prompt_eval_count"`    // prompt tokens consumed
-	PromptEvalDuration int      `json:"prompt_eval_duration"` // nanoseconds to parse prompt
-	EvalCount          int      `json:"eval_count"`           // response tokens consumed
-	EvalDuration       int      `json:"eval_duration"`        // nanoseconds to generate output
+	Model              string        `json:"model"`
+	CreatedAt          string        `json:"created_at"`
+	Message            OAgentMessage `json:"message"`
+	Done               bool          `json:"done"`
+	DoneReason         string        `json:"done_reason"`
+	TotalDuration      int           `json:"total_duration"`       // total time nanoseconds
+	LoadDuration       int           `json:"load_duration"`        // nanoseconds to load model
+	PromptEvalCount    int           `json:"prompt_eval_count"`    // prompt tokens consumed
+	PromptEvalDuration int           `json:"prompt_eval_duration"` // nanoseconds to parse prompt
+	EvalCount          int           `json:"eval_count"`           // response tokens consumed
+	EvalDuration       int           `json:"eval_duration"`        // nanoseconds to generate output
 }
 
 // The basic message type
 type OMessage struct {
-	Role      ORole   `json:"role"`               // "user"
-	Content   string  `json:"content"`            // Timestamp ISO 8601
-	Thinking  string  `json:"thinking,omitempty"` // model's "thinking"
+	Role    ORole  `json:"role"` // "user"
+	Content string `json:"content"`
+}
+
+type OAgentMessage struct {
+	Role      ORole   `json:"role"`
+	Content   string  `json:"content"`  // Timestamp ISO 8601
+	Thinking  string  `json:"thinking"` // model's "thinking"
 	ToolCalls []OTool `json:"tool_calls"`
 }
 
 // A tool available for the model to choose from
 type OTool struct {
-	ID       string    `json:"id,omitempty"` // Returned in response
-	Type     string    `json:"type"`         // Always "function"
+	ID       string    `json:"id"`   // Returned in response
+	Type     string    `json:"type"` // Always "function"
 	Function OFunction `json:"function"`
 }
 
 // A function for the toolcall
 type OFunction struct {
-	Index       int            `json:"id,omitempty"` // Returned in response
+	Index       int            `json:"id"` // Returned in response
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	Parameters  OFnParams      `json:"parameters"`
-	Arguments   map[string]any `json:"arguments,omitempty"` // Returned in response
+	Arguments   map[string]any `json:"arguments"` // Returned in response
 }
 
 // An argument for a toolcall function
