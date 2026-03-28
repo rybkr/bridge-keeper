@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"bridgekeeper/internal/console"
@@ -26,11 +27,21 @@ type TerminalApprover struct {
 // NewTerminalApprover initializes a new TerminalApprover.
 // It returns the approver and an error, matching the signature expected in main.go.
 func NewTerminalApprover() (*TerminalApprover, error) {
-	in, err := os.Open("/dev/tty")
+	var inPath, outPath string
+
+	if runtime.GOOS == "windows" {
+		inPath = "CONIN$"
+		outPath = "CONOUT$"
+	} else {
+		inPath = "/dev/tty"
+		outPath = "/dev/tty"
+	}
+
+	in, err := os.Open(inPath)
 	if err != nil {
 		return nil, err
 	}
-	out, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0)
+	out, err := os.OpenFile(outPath, os.O_WRONLY, 0)
 	if err != nil {
 		_ = in.Close()
 		return nil, err
