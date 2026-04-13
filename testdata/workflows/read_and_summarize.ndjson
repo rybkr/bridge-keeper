@@ -1,0 +1,2 @@
+{"description":"Read a file (allowed by default policy)","request":{"jsonrpc":"2.0","id":1,"method":"tool_call","params":{"id":"t1","tool":"fs","action":"read_file","args":{"path":"README.md"}}},"expect":{"allowed":true}}
+{"description":"List directory contents","request":{"jsonrpc":"2.0","id":2,"method":"tool_call","params":{"id":"t2","tool":"fs","action":"list_dir","args":{"path":"."}}},"expect":{"allowed":true}}

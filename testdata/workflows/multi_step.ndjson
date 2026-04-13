@@ -1,0 +1,4 @@
+{"description":"Step 1: Check git status (allowed)","request":{"jsonrpc":"2.0","id":1,"method":"tool_call","params":{"id":"t1","tool":"git","action":"status"}},"expect":{"allowed":true}}
+{"description":"Step 2: View git log (allowed)","request":{"jsonrpc":"2.0","id":2,"method":"tool_call","params":{"id":"t2","tool":"git","action":"log","args":{"n":5}}},"expect":{"allowed":true}}
+{"description":"Step 3: Read a source file (allowed)","request":{"jsonrpc":"2.0","id":3,"method":"tool_call","params":{"id":"t3","tool":"fs","action":"read_file","args":{"path":"go.mod"}}},"expect":{"allowed":true}}
+{"description":"Step 4: List packages (requires ask)","request":{"jsonrpc":"2.0","id":4,"method":"tool_call","params":{"id":"t4","tool":"pkg","action":"list"}},"expect":{"decision":"ask"}}
