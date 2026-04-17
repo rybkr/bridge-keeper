@@ -81,23 +81,32 @@ type toolParameters struct {
 }
 
 type ToolProperty struct {
-	Type       string `json:"type"`
-	Descrption string `json:"description"`
+	Type       string        `json:"type"`
+	Descrption string        `json:"description"`
+	Items      *ToolProperty `json:"items,omitempty"`
 }
 
 // / ToolDef struct ///
 // Used by the query to bundle the schema
 type ToolDef struct {
 	// Must match function name the model wants to call
-	Name        string
-	Tool        string
-	Action      string
-	Description string
-	Parameters  map[string]ToolProperty
+	Name           string
+	Tool           string
+	Action         string
+	ActionFromArgs func(map[string]any) string
+	Description    string
+	Parameters     map[string]ToolProperty
 
 	// determines which parameter names must be used
 	Required []string
 	Handler  Handler // called with arguments chosen by the model
+}
+
+type OllamaChat struct {
+	messages []message
+	toolset  []tool
+	defs     map[string]ToolDef
+	mediator *Mediator
 }
 
 /////// Utility Functions ///////
@@ -222,6 +231,26 @@ func SetOllamaModel(model string) {
 	ollamaModel = model
 }
 
+func CurrentOllamaModel() string {
+	return ollamaModel
+}
+
+func NewOllamaChat(toolDefs []ToolDef, mediator *Mediator) *OllamaChat {
+	toolset := make([]tool, len(toolDefs))
+	defs := make(map[string]ToolDef, len(toolDefs))
+
+	for i, def := range toolDefs {
+		toolset[i] = def.ollamaJsonFormat()
+		defs[def.Name] = def
+	}
+
+	return &OllamaChat{
+		toolset:  toolset,
+		defs:     defs,
+		mediator: mediator,
+	}
+}
+
 /////// Public-Facing Ollama API ///////
 
 // / Initialize sthe local Ollama server on given port ///
@@ -283,60 +312,55 @@ func Query(userPrompt string) (string, error) {
 }
 
 func QueryWithTools(ctx context.Context, userPrompt string, tools []ToolDef, mediator *Mediator) (string, error) {
+	return NewOllamaChat(tools, mediator).SendMessageWithTools(ctx, userPrompt)
+}
 
+func (chat *OllamaChat) SendMessageWithTools(ctx context.Context, userPrompt string) (string, error) {
 	// Force initialize to run first
 	if baseURL == "" {
 		return "", fmt.Errorf("Ollama not initialized")
 	}
 
-	// this one is ai magic tbh
-	toolset := make([]tool, len(tools))
-	defs := make(map[string]ToolDef, len(tools))
+	chat.messages = append(chat.messages, message{Role: "user", Content: userPrompt})
 
-	for i, toold := range tools {
-		toolset[i] = toold.ollamaJsonFormat()
-		defs[toold.Name] = toold
+	for {
+		llmResponse, err := basicChat(chat.messages, chat.toolset)
+		if err != nil {
+			return "", fmt.Errorf("failed to set up context: %w", err)
+		}
+
+		chat.messages = append(chat.messages, llmResponse)
+
+		if len(llmResponse.ToolCalls) == 0 {
+			return strings.TrimSpace(llmResponse.Content), nil
+		}
+
+		for _, tcall := range llmResponse.ToolCalls {
+			def, ok := chat.defs[tcall.Function.Name]
+			if !ok {
+				return "", fmt.Errorf("tool %q unknown", tcall.Function.Name)
+			}
+
+			action := def.Action
+			if def.ActionFromArgs != nil {
+				if resolved := strings.TrimSpace(def.ActionFromArgs(tcall.Function.Arguments)); resolved != "" {
+					action = resolved
+				}
+			}
+
+			toolCall := types.ToolCall{
+				ID:     "ollama-internal",
+				Tool:   def.Tool,
+				Action: action,
+				Args:   tcall.Function.Arguments,
+			}
+
+			result, err := chat.mediator.Execute(ctx, toolCall, def.Handler)
+			if err != nil {
+				return "", fmt.Errorf("tool %q execution failed: %w", tcall.Function.Name, err)
+			}
+
+			chat.messages = append(chat.messages, message{Role: "tool", Content: result})
+		}
 	}
-
-	// First need to send prompt and tool schema
-	messages := []message{{Role: "user", Content: userPrompt}}
-	llmResponse, err := basicChat(messages, toolset)
-	if nil != err {
-		return "", fmt.Errorf("Failed to set up context")
-	}
-
-	// If the model doesn't request a tool call just send back its text
-	if len(llmResponse.ToolCalls) == 0 {
-		return strings.TrimSpace(llmResponse.Content), nil
-	}
-
-	// Execute tools
-	tcall := llmResponse.ToolCalls[0]
-
-	// Map Ollama tool call to our internal types.ToolCall structure
-	def, ok := defs[tcall.Function.Name]
-	if !ok {
-		return "", fmt.Errorf("tool %q unknown", tcall.Function.Name)
-	}
-
-	toolCall := types.ToolCall{
-		ID:     "ollama-internal",
-		Tool:   def.Tool,
-		Action: def.Action,
-		Args:   tcall.Function.Arguments,
-	}
-
-	result, err := mediator.Execute(ctx, toolCall, def.Handler)
-	if err != nil {
-		return "", fmt.Errorf("tool %q execution failed: %w", tcall.Function.Name, err)
-	}
-
-	// Mush assistant and tool messages together
-	messages = append(
-		messages,
-		llmResponse,
-		message{Role: "tool", Content: result},
-	)
-
-	return chatStream(messages, nil)
 }

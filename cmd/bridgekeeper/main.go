@@ -129,6 +129,65 @@ func runGeminiModel(mediator *runtime.Mediator, registry *tools.Registry, pf *po
 	}
 }
 
+func runOllamaModel(ctx context.Context, mediator *runtime.Mediator, registry *tools.Registry, pf *policy.PolicyFile) {
+	session, err := console.NewSession(os.Stdin, os.Stdout)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	chat := newOllamaChat(mediator, registry)
+	printOllamaCommands()
+
+	for {
+		input, err := session.ReadLine("> ")
+		if err != nil {
+			if console.IsInterrupt(err) {
+				fmt.Println("\nGoodbye!")
+				return
+			}
+			log.Fatal(err)
+		}
+
+		input = strings.TrimSpace(input)
+		if input == "" {
+			continue
+		}
+
+		if strings.HasPrefix(input, "/") {
+			parts := strings.Fields(input)
+			command := parts[0]
+
+			switch command {
+			case "/exit", "/quit":
+				fmt.Println("Goodbye!")
+				return
+
+			case "/model":
+				if selectOllamaModel(parts) {
+					chat = newOllamaChat(mediator, registry)
+				}
+
+			case "/policy":
+				fmt.Println(policy.FormatPolicy(pf))
+
+			case "/help":
+				printOllamaCommands()
+
+			default:
+				fmt.Println("Unknown command. Try /help to list commands.")
+			}
+		} else {
+			if err := getOllamaResponse(ctx, chat, input); err != nil {
+				if console.IsInterrupt(err) {
+					fmt.Println("\nGoodbye!")
+					return
+				}
+				log.Printf("\nError getting response: %v\n", err)
+			}
+		}
+	}
+}
+
 func getModelResponse(agent *bkagent.GeminiAgent, ctx context.Context, input string, conciseMode bool) error {
 	fmt.Printf("Thinking (%s)...\n", agent.CurrentModel())
 
@@ -142,6 +201,18 @@ func getModelResponse(agent *bkagent.GeminiAgent, ctx context.Context, input str
 	return nil
 }
 
+func getOllamaResponse(ctx context.Context, chat *runtime.OllamaChat, input string) error {
+	fmt.Printf("Thinking (%s)...\n", runtime.CurrentOllamaModel())
+
+	response, err := chat.SendMessageWithTools(ctx, input)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("\n(Ollama) - " + response + "\n")
+	return nil
+}
+
 func printGeminiCommands(agent *bkagent.GeminiAgent) {
 	fmt.Println("--- BridgeKeeper Gemini ---")
 	fmt.Printf("Current Model: %s\n", agent.CurrentModel())
@@ -151,6 +222,18 @@ func printGeminiCommands(agent *bkagent.GeminiAgent) {
 	fmt.Println("  /model <name>  - Select a model (e.g., /model gemini-1.5-pro)")
 	fmt.Println("  /policy        - Show the current loaded policy")
 	fmt.Println("  /concise       - Toggle the verboseness of the Model")
+	fmt.Println("  <your prompt>  - Chat with the AI (Auto-Tools Enabled)")
+	fmt.Println("  /exit          - Quit")
+	fmt.Println("-------------------------------")
+}
+
+func printOllamaCommands() {
+	fmt.Println("--- BridgeKeeper Ollama ---")
+	fmt.Printf("Current Model: %s\n", runtime.CurrentOllamaModel())
+	fmt.Println("Commands:")
+	fmt.Println("  /help          - Show this help message")
+	fmt.Println("  /model <name>  - Select the Ollama model")
+	fmt.Println("  /policy        - Show the current loaded policy")
 	fmt.Println("  <your prompt>  - Chat with the AI (Auto-Tools Enabled)")
 	fmt.Println("  /exit          - Quit")
 	fmt.Println("-------------------------------")
@@ -175,6 +258,16 @@ func selectGeminiModel(agent *bkagent.GeminiAgent, parts []string) {
 	}
 	agent.SetModel(parts[1])
 	fmt.Printf("Model changed to: %s\n", agent.CurrentModel())
+}
+
+func selectOllamaModel(parts []string) bool {
+	if len(parts) < 2 {
+		fmt.Println("Usage: /model <model_name>")
+		return false
+	}
+	runtime.SetOllamaModel(parts[1])
+	fmt.Printf("Model changed to: %s\n", runtime.CurrentOllamaModel())
+	return true
 }
 
 func toggleGeminiConciseness(conciseMode *bool) {
@@ -269,7 +362,6 @@ func main() {
 		Sandbox:  validator,
 		Redactor: redact.New(),
 	}
-	toolchain := runtimeVersionTools(registry)
 
 	if *mode == "" {
 		fmt.Println("Invalid selection please select Gemini or Ollama with --mode flag.")
@@ -285,7 +377,6 @@ func main() {
 
 	case "ollama", "Ollama":
 		/////// OLLAMA ///////
-		// This just runs through a list of prompts for testing
 		runtime.SetOllamaModel(resolveOllamaModel(*ollamaModel))
 
 		if err := runtime.Initialize(11434); nil != err {
@@ -295,23 +386,7 @@ func main() {
 		// Call the anonymous function once main exits scope
 		defer deferredShutdown()
 
-		// simple tests - replace with filtered promtps later
-		prompts := []string{
-			"Get the version of Go",
-			"Get the version of rust with Cargo",
-		}
-
-		// send the list of prompts
-		for _, prompt := range prompts {
-			fmt.Printf("\n> %s\n", prompt)
-			response, err := runtime.QueryWithTools(ctx, prompt, toolchain, mediator)
-			if nil != err {
-				log.Printf("Query error %v", err)
-				auditLogger.Log(audit.Error, "ollama_query_error", map[string]any{"error": err.Error()})
-				continue // attempt other prompts
-			}
-			fmt.Printf("< %s\n", response)
-		}
+		runOllamaModel(ctx, mediator, registry, pf)
 
 	case "gemini", "Gemini":
 		/////// GEMINI ///////
@@ -324,24 +399,164 @@ func main() {
 	}
 }
 
-func runtimeVersionTools(registry *tools.Registry) []runtime.ToolDef {
+func newOllamaChat(mediator *runtime.Mediator, registry *tools.Registry) *runtime.OllamaChat {
+	return runtime.NewOllamaChat(ollamaToolchain(registry), mediator)
+}
+
+func ollamaGitAction(args map[string]any) string {
+	argsAny, ok := args["args"].([]any)
+	if !ok || len(argsAny) == 0 {
+		return ""
+	}
+	subCommand, ok := argsAny[0].(string)
+	if !ok {
+		return ""
+	}
+	return subCommand
+}
+
+func ollamaToolchain(registry *tools.Registry) []runtime.ToolDef {
+	lastPath := registry.WorkspaceRoot
+
 	return []runtime.ToolDef{
 		{
-			Name:        "go_version",
-			Tool:        "pkg",
-			Action:      "list",
-			Description: "Get the current version of Go.",
-			Handler: func(ctx context.Context, _ map[string]any) (string, error) {
-				return registry.GoVersion(ctx)
+			Name:           "execute_git_command",
+			Tool:           "git",
+			ActionFromArgs: ollamaGitAction,
+			Description:    "Executes a git command in a local repository. Use this to check status, view logs, examine diffs, etc. Only provide the arguments, not the git binary itself.",
+			Parameters: map[string]runtime.ToolProperty{
+				"args": {
+					Type:       "array",
+					Descrption: "A list of strings representing the git arguments, for example ['log', '-n', '3'].",
+					Items:      &runtime.ToolProperty{Type: "string"},
+				},
+				"path": {
+					Type:       "string",
+					Descrption: "The directory path of the git repository. If omitted, the agent will use the previously accessed repository.",
+				},
+			},
+			Required: []string{"args"},
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				if pathAny, exists := args["path"]; exists {
+					if pathStr, ok := pathAny.(string); ok && pathStr != "" {
+						lastPath = pathStr
+					}
+				}
+
+				argsAny, exists := args["args"].([]any)
+				if !exists {
+					return "Error: model failed to provide git arguments.", nil
+				}
+
+				var gitArgs []string
+				for _, arg := range argsAny {
+					if strArg, ok := arg.(string); ok {
+						gitArgs = append(gitArgs, strArg)
+					}
+				}
+				return registry.ExecuteGitCommand(ctx, tools.GitExecArgs{Path: lastPath, Args: gitArgs})
 			},
 		},
 		{
-			Name:        "rust_version",
-			Tool:        "pkg",
-			Action:      "list",
-			Description: "Get the current version of Rust.",
-			Handler: func(ctx context.Context, _ map[string]any) (string, error) {
-				return registry.RustVersion(ctx)
+			Name:        "read_file",
+			Tool:        "fs",
+			Action:      "read_file",
+			Description: "Reads the full contents of a local file. Use this to analyze, summarize, or reference specific parts of a file. Provide the path to the file.",
+			Parameters: map[string]runtime.ToolProperty{
+				"path": {
+					Type:       "string",
+					Descrption: "The absolute or relative path to the file to read.",
+				},
+			},
+			Required: []string{"path"},
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				pathAny, exists := args["path"]
+				if !exists {
+					return "Error: model failed to provide file path.", nil
+				}
+				pathStr, ok := pathAny.(string)
+				if !ok || pathStr == "" {
+					return "Error: path argument is invalid or empty.", nil
+				}
+				return registry.ReadFile(ctx, tools.ReadFileArgs{Path: pathStr})
+			},
+		},
+		{
+			Name:        "write_file",
+			Tool:        "fs",
+			Action:      "write_file",
+			Description: "Writes text content to a local file. Use this only when the user explicitly wants to create or update a file.",
+			Parameters: map[string]runtime.ToolProperty{
+				"path": {
+					Type:       "string",
+					Descrption: "The absolute or relative path to the file to write.",
+				},
+				"content": {
+					Type:       "string",
+					Descrption: "The text content to write to the file.",
+				},
+			},
+			Required: []string{"path", "content"},
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				pathAny, hasPath := args["path"]
+				contentAny, hasContent := args["content"]
+				if !hasPath || !hasContent {
+					return "Error: model failed to provide file path or content.", nil
+				}
+				pathStr, ok := pathAny.(string)
+				if !ok || pathStr == "" {
+					return "Error: path argument is invalid or empty.", nil
+				}
+				contentStr, ok := contentAny.(string)
+				if !ok {
+					return "Error: content argument must be a string.", nil
+				}
+				return registry.WriteFile(ctx, tools.WriteFileArgs{Path: pathStr, Content: contentStr})
+			},
+		},
+		{
+			Name:        "http_get",
+			Tool:        "http",
+			Action:      "get",
+			Description: "Fetches the contents of an HTTP or HTTPS URL. Use this for read-only network retrieval.",
+			Parameters: map[string]runtime.ToolProperty{
+				"url": {
+					Type:       "string",
+					Descrption: "The HTTP or HTTPS URL to fetch.",
+				},
+			},
+			Required: []string{"url"},
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				urlAny, hasURL := args["url"]
+				if !hasURL {
+					return "Error: model failed to provide a URL.", nil
+				}
+				urlStr, ok := urlAny.(string)
+				if !ok || urlStr == "" {
+					return "Error: url argument is invalid or empty.", nil
+				}
+				return registry.HTTPGet(ctx, tools.HTTPGetArgs{URL: urlStr})
+			},
+		},
+		{
+			Name:        "list_directory",
+			Tool:        "fs",
+			Action:      "list_dir",
+			Description: "Lists the contents of a specified directory. Use this to explore the repository structure, find files, or check for the presence of specific items.",
+			Parameters: map[string]runtime.ToolProperty{
+				"path": {
+					Type:       "string",
+					Descrption: "The path to the directory to list.",
+				},
+			},
+			Required: []string{"path"},
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				if pathAny, exists := args["path"]; exists {
+					if pathStr, ok := pathAny.(string); ok && pathStr != "" {
+						lastPath = pathStr
+					}
+				}
+				return registry.ListDirectory(ctx, tools.ListDirectoryArgs{Path: lastPath})
 			},
 		},
 	}
