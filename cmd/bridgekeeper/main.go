@@ -33,17 +33,29 @@ func deferredShutdown() {
 	}
 }
 
-func loadGeminiAPIKey() string {
+func loadEnvFile() {
 	err := godotenv.Load()
 	if err != nil {
 		log.Printf("Warning: Error loading .env file (using system env vars if available): %v\n", err)
 	}
+}
 
+func loadGeminiAPIKey() string {
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
 		log.Fatal("GEMINI_API_KEY is not set.")
 	}
 	return apiKey
+}
+
+func resolveOllamaModel(flagValue string) string {
+	if model := strings.TrimSpace(flagValue); model != "" {
+		return model
+	}
+	if model := strings.TrimSpace(os.Getenv("OLLAMA_MODEL")); model != "" {
+		return model
+	}
+	return runtime.DefaultOllamaModel
 }
 
 func runGeminiModel(mediator *runtime.Mediator, registry *tools.Registry, pf *policy.PolicyFile) {
@@ -181,7 +193,10 @@ func main() {
 	verbose := flag.Bool("verbose", false, "enable verbose output")
 	noHITL := flag.Bool("no-hitl", false, "disable human-in-the-loop approval (auto-approve all)")
 	mode := flag.String("mode", "", "mode to run the agent in (ollama or gemini)")
+	ollamaModel := flag.String("ollama-model", "", "Ollama model name (overrides OLLAMA_MODEL)")
 	flag.Parse()
+
+	loadEnvFile()
 
 	pf, err := policy.LoadPath(*policyPath)
 	if err != nil {
@@ -271,6 +286,7 @@ func main() {
 	case "ollama", "Ollama":
 		/////// OLLAMA ///////
 		// This just runs through a list of prompts for testing
+		runtime.SetOllamaModel(resolveOllamaModel(*ollamaModel))
 
 		if err := runtime.Initialize(11434); nil != err {
 			log.Fatalf("Could not initialize: %s", err)

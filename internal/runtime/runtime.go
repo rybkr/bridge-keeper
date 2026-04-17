@@ -15,11 +15,12 @@ import (
 )
 
 // ///// Constants ///////
-const model = "functiongemma:latest"
+const DefaultOllamaModel = "functiongemma:latest"
 
 // ///// "Globals" ///////
 var ollamaProc *exec.Cmd
 var baseURL string
+var ollamaModel = DefaultOllamaModel
 
 /////// Types ///////
 
@@ -143,7 +144,7 @@ func chatStream(messages []message, tools []tool) (string, error) {
 func basicChat(messages []message, tools []tool) (message, error) {
 
 	requestBody := chatRequest{
-		Model:    model,
+		Model:    ollamaModel,
 		Messages: messages,
 		Tools:    tools,
 		Stream:   true,
@@ -210,6 +211,15 @@ func basicChat(messages []message, tools []tool) (message, error) {
 
 	fullMessage.Content = contentBuffer.String()
 	return fullMessage, nil
+}
+
+func SetOllamaModel(model string) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		ollamaModel = DefaultOllamaModel
+		return
+	}
+	ollamaModel = model
 }
 
 /////// Public-Facing Ollama API ///////
