@@ -1,0 +1,2 @@
+{"description": "Step 1: Locate log directories", "request": {"jsonrpc": "2.0", "id": 1, "method": "tool_call", "params": {"id": "t1", "tool": "fs", "action": "list_dir", "args": {"path": "/var/logs"}}}, "expect": {"decision": "allow", "blocked": false}}
+{"description": "Step 2: Grep logs for errors", "request": {"jsonrpc": "2.0", "id": 2, "method": "tool_call", "params": {"id": "t2", "tool": "shell", "action": "exec", "args": {"command": "grep 'ERROR' /var/logs/app.log"}}}, "expect": {"decision": "ask", "blocked": false}}
