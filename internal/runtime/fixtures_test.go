@@ -35,6 +35,42 @@ func TestAdversarialFixtures_BlockExpectedCalls(t *testing.T) {
 	}
 }
 
+func TestAdversarialFixtures_BlockShellInjectionAtMediator(t *testing.T) {
+	mediator := newFixtureMediator(t)
+	calls := loadFixtureCalls(t, filepath.Join("..", "..", "testdata", "adversarial", "shell_injection.ndjson"))
+
+	for _, call := range calls {
+		result, err := mediator.Execute(context.Background(), call, func(context.Context, map[string]any) (string, error) {
+			t.Fatalf("handler should not run for shell injection call %+v", call)
+			return "", nil
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if !strings.Contains(strings.ToLower(result), "denied") {
+			t.Fatalf("expected denied result for %+v, got %q", call, result)
+		}
+	}
+}
+
+func TestAdversarialFixtures_BlockDomainBypassAtMediator(t *testing.T) {
+	mediator := newFixtureMediator(t)
+	calls := loadFixtureCalls(t, filepath.Join("..", "..", "testdata", "adversarial", "domain_bypass.ndjson"))
+
+	for _, call := range calls {
+		result, err := mediator.Execute(context.Background(), call, func(context.Context, map[string]any) (string, error) {
+			t.Fatalf("handler should not run for blocked HTTP call %+v", call)
+			return "", nil
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if !strings.Contains(strings.ToLower(result), "denied") {
+			t.Fatalf("expected denied result for %+v, got %q", call, result)
+		}
+	}
+}
+
 func TestWorkflowFixtures_DefaultPolicyShape(t *testing.T) {
 	mediator := newFixtureMediator(t)
 	calls := loadFixtureCalls(t, filepath.Join("..", "..", "testdata", "workflows", "read_and_summarize.ndjson"))
