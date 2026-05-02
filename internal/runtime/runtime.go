@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"bridgekeeper/internal/redact"
 	"bridgekeeper/internal/types"
 )
 
@@ -107,6 +108,7 @@ type OllamaChat struct {
 	toolset  []tool
 	defs     map[string]ToolDef
 	mediator *Mediator
+	taint    *redact.TaintTracker
 }
 
 /////// Utility Functions ///////
@@ -248,6 +250,7 @@ func NewOllamaChat(toolDefs []ToolDef, mediator *Mediator) *OllamaChat {
 		toolset:  toolset,
 		defs:     defs,
 		mediator: mediator,
+		taint:    redact.NewTaintTracker(),
 	}
 }
 
@@ -320,6 +323,7 @@ func (chat *OllamaChat) SendMessageWithTools(ctx context.Context, userPrompt str
 	if baseURL == "" {
 		return "", fmt.Errorf("Ollama not initialized")
 	}
+	ctx = WithTaintTracker(ctx, chat.taint)
 
 	chat.messages = append(chat.messages, message{Role: "user", Content: userPrompt})
 

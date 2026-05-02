@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"bridgekeeper/internal/netguard"
 	"bridgekeeper/internal/types"
 )
 
@@ -883,6 +884,10 @@ func hostFromURL(rawURL string) string {
 // checkDomain applies an AllowDeny rule to a domain value.
 // Patterns may be exact ("localhost", "127.0.0.1") or wildcard ("*.example.com").
 func checkDomain(ad *AllowDeny, domain string) (string, bool) {
+	if reason, blocked := netguard.BlockedHostReason(domain); blocked {
+		return reason, false
+	}
+
 	// Deny patterns take precedence.
 	for _, pattern := range ad.Deny {
 		if matchDomain(pattern, domain) {

@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"strings"
 
+	"bridgekeeper/internal/redact"
 	"bridgekeeper/internal/runtime"
 	"bridgekeeper/internal/tools"
 	"bridgekeeper/internal/types"
@@ -23,6 +24,7 @@ type GeminiAgent struct {
 	lastPath     string
 	mediator     *runtime.Mediator
 	registry     *tools.Registry
+	taint        *redact.TaintTracker
 }
 
 func NewGeminiAgent(ctx context.Context, apiKey string, mediator *runtime.Mediator, registry *tools.Registry) *GeminiAgent {
@@ -39,6 +41,7 @@ func NewGeminiAgent(ctx context.Context, apiKey string, mediator *runtime.Mediat
 		lastPath:     registry.WorkspaceRoot,
 		mediator:     mediator,
 		registry:     registry,
+		taint:        redact.NewTaintTracker(),
 	}
 }
 
@@ -55,7 +58,9 @@ func (agent *GeminiAgent) SendMessageWithTools(ctx context.Context, prompt strin
 		}
 		agent.chatSession = chat
 		agent.isConcise = conciseMode
+		agent.taint = redact.NewTaintTracker()
 	}
+	ctx = runtime.WithTaintTracker(ctx, agent.taint)
 
 	resp, err := agent.chatSession.SendMessage(ctx, genai.Part{Text: prompt})
 	if err != nil {

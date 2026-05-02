@@ -99,6 +99,34 @@ func TestValidateToolCall_RejectsInvalidHTTPURL(t *testing.T) {
 	}
 }
 
+func TestValidateToolCall_RejectsUnsafeHTTPURL(t *testing.T) {
+	validator, err := NewValidator("/tmp/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rawURL := range []string{
+		"http://127.1/admin",
+		"http://2130706433/",
+		"http://[::1]/",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://10.0.0.1/",
+	} {
+		t.Run(rawURL, func(t *testing.T) {
+			_, err = validator.ValidateToolCall(types.ToolCall{
+				Tool:   "http",
+				Action: "get",
+				Args: map[string]any{
+					"url": rawURL,
+				},
+			})
+			if err == nil {
+				t.Fatal("expected unsafe URL error")
+			}
+		})
+	}
+}
+
 func TestValidateToolCall_RejectsOversizedHTTPPostBody(t *testing.T) {
 	validator, err := NewValidator("/tmp/workspace")
 	if err != nil {

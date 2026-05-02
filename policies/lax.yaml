@@ -40,6 +40,9 @@ capabilities:
     tool: http
     actions: [post]
     decision: ask
+    constraints:
+      domains:
+        deny: ["*.internal.corp", "localhost", "127.0.0.1"]
 
   - name: pkg-ops
     tool: pkg

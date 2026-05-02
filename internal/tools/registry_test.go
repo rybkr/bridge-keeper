@@ -116,6 +116,52 @@ func TestHTTPGet(t *testing.T) {
 	}
 }
 
+func TestHTTPGetBlocksUnsafeInitialURL(t *testing.T) {
+	validator, err := sandbox.NewValidator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(t.TempDir(), validator)
+	registry.HTTPClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			t.Fatal("transport should not be called for blocked URL")
+			return nil, nil
+		}),
+	}
+
+	if _, err := registry.HTTPGet(context.Background(), HTTPGetArgs{URL: "http://2130706433/"}); err == nil {
+		t.Fatal("expected unsafe URL error")
+	}
+}
+
+func TestHTTPGetBlocksRedirectToUnsafeURL(t *testing.T) {
+	validator, err := sandbox.NewValidator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(t.TempDir(), validator)
+	registry.HTTPClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Hostname() != "example.com" {
+				t.Fatalf("redirect target should have been blocked before transport, got %s", req.URL.String())
+			}
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Status:     "302 Found",
+				Body:       io.NopCloser(strings.NewReader("")),
+				Header: http.Header{
+					"Location": []string{"http://127.1/admin"},
+				},
+				Request: req,
+			}, nil
+		}),
+	}
+
+	if _, err := registry.HTTPGet(context.Background(), HTTPGetArgs{URL: "https://example.com/data"}); err == nil {
+		t.Fatal("expected unsafe redirect error")
+	}
+}
+
 func TestHTTPPost(t *testing.T) {
 	validator, err := sandbox.NewValidator(t.TempDir())
 	if err != nil {
@@ -153,6 +199,35 @@ func TestHTTPPost(t *testing.T) {
 	}
 	if got != "accepted" {
 		t.Fatalf("HTTPPost() = %q, want accepted", got)
+	}
+}
+
+func TestHTTPGetBlocksRedirectToUnsafeHost(t *testing.T) {
+	validator, err := sandbox.NewValidator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(t.TempDir(), validator)
+	registry.HTTPClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Status:     "302 Found",
+				Header: http.Header{
+					"Location": []string{"http://169.254.169.254/latest/meta-data/"},
+				},
+				Body:    io.NopCloser(strings.NewReader("redirecting")),
+				Request: req,
+			}, nil
+		}),
+	}
+
+	_, err = registry.HTTPGet(context.Background(), HTTPGetArgs{URL: "https://example.com/start"})
+	if err == nil {
+		t.Fatal("expected redirect to metadata endpoint to be blocked")
+	}
+	if !strings.Contains(err.Error(), "redirect blocked") {
+		t.Fatalf("error = %q, want redirect blocked", err.Error())
 	}
 }
 

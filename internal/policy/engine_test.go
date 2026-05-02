@@ -277,6 +277,36 @@ func TestEvaluate_DomainMatching(t *testing.T) {
 			wantDecide: types.Deny,
 		},
 		{
+			name:       "alternative loopback IP is blocked",
+			url:        "http://127.1/admin",
+			denyPats:   []string{"localhost", "127.0.0.1"},
+			wantDecide: types.Deny,
+		},
+		{
+			name:       "decimal loopback IP is blocked",
+			url:        "http://2130706433/admin",
+			denyPats:   []string{"localhost", "127.0.0.1"},
+			wantDecide: types.Deny,
+		},
+		{
+			name:       "private IPv4 is blocked",
+			url:        "http://10.0.0.1/admin",
+			denyPats:   []string{"localhost", "127.0.0.1"},
+			wantDecide: types.Deny,
+		},
+		{
+			name:       "metadata endpoint is blocked",
+			url:        "http://169.254.169.254/latest/meta-data/",
+			denyPats:   []string{"localhost", "127.0.0.1"},
+			wantDecide: types.Deny,
+		},
+		{
+			name:       "IPv6 loopback is blocked",
+			url:        "http://[::1]/",
+			denyPats:   []string{"localhost", "127.0.0.1"},
+			wantDecide: types.Deny,
+		},
+		{
 			name:       "safe external domain passes",
 			url:        "https://api.example.com/data",
 			denyPats:   []string{"*.internal.corp", "localhost"},

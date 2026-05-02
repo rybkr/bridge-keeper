@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"bridgekeeper/internal/netguard"
 )
 
 func (r *Registry) HTTPGet(ctx context.Context, req HTTPGetArgs) (string, error) {
@@ -44,7 +46,12 @@ func (r *Registry) httpRequest(ctx context.Context, method string, rawURL string
 		bodyReader = bytes.NewReader([]byte(body))
 	}
 
-	reqHTTP, err := http.NewRequestWithContext(ctx, method, rawURL, bodyReader)
+	parsedURL, err := netguard.ValidateHTTPURL(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("http %s URL blocked: %w", strings.ToLower(method), err)
+	}
+
+	reqHTTP, err := http.NewRequestWithContext(ctx, method, parsedURL.String(), bodyReader)
 	if err != nil {
 		return "", fmt.Errorf("http %s request: %w", strings.ToLower(method), err)
 	}
@@ -52,11 +59,14 @@ func (r *Registry) httpRequest(ctx context.Context, method string, rawURL string
 		reqHTTP.Header.Set("Content-Type", contentType)
 	}
 
-	client := &http.Client{
+	client := netguard.NewGuardedHTTPClient(&http.Client{
 		Timeout: timeout,
-	}
+	})
 	if r != nil && r.HTTPClient != nil {
-		client = r.HTTPClient
+		client = netguard.NewGuardedHTTPClient(r.HTTPClient)
+		if client.Timeout == 0 {
+			client.Timeout = timeout
+		}
 	}
 	resp, err := client.Do(reqHTTP)
 	if err != nil {

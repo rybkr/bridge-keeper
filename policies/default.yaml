@@ -97,7 +97,7 @@ capabilities:
           pattern: "^https?://"
       domains:
         deny: ["*.internal.corp", "localhost", "127.0.0.1"]
-        remediation: "Use an external domain instead of localhost or internal hosts."
+        remediation: "Use a public external host instead of localhost, private networks, or metadata endpoints."
 
   - name: http-post
     tool: http
@@ -123,6 +123,9 @@ capabilities:
           required: true
         content_type:
           type: string
+      domains:
+        deny: ["*.internal.corp", "localhost", "127.0.0.1"]
+        remediation: "Use a public external host instead of localhost, private networks, or metadata endpoints."
 
   - name: pkg-ops
     tool: pkg
