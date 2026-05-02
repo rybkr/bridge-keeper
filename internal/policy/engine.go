@@ -5,10 +5,15 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"bridgekeeper/internal/types"
 )
+
+type subjectContextKey struct{}
 
 // Engine evaluates tool calls against a loaded PolicyFile.
 // It is safe for concurrent use after construction — all state is read-only.
@@ -23,6 +28,18 @@ func NewEngine(policy *PolicyFile) *Engine {
 	return &Engine{policy: policy}
 }
 
+// WithSubject returns a context carrying the authenticated policy subject used
+// by scoped policy rules.
+func WithSubject(ctx context.Context, subject types.PolicySubject) context.Context {
+	return context.WithValue(ctx, subjectContextKey{}, subject)
+}
+
+// SubjectFromContext returns the policy subject attached by WithSubject.
+func SubjectFromContext(ctx context.Context) (types.PolicySubject, bool) {
+	subject, ok := ctx.Value(subjectContextKey{}).(types.PolicySubject)
+	return subject, ok
+}
+
 // Evaluate checks call against the policy and returns a PolicyDecision.
 //
 // Evaluation order:
@@ -33,20 +50,32 @@ func NewEngine(policy *PolicyFile) *Engine {
 //  3. If no constraint is violated the capability's own decision is returned.
 //  4. If no capability matched, the file-level Default decision is used
 //     (falling back to "deny" when Default is empty).
-func (e *Engine) Evaluate(_ context.Context, call types.ToolCall) types.PolicyDecision {
+func (e *Engine) Evaluate(ctx context.Context, call types.ToolCall) types.PolicyDecision {
+	subject, _ := SubjectFromContext(ctx)
+
 	for _, cap := range e.policy.Capabilities {
 		if !capabilityMatches(cap, call) {
 			continue
 		}
 
+		if !scopeMatches(cap.Scope, subject) {
+			continue
+		}
+
+		if cap.Conditions != nil {
+			matched, err := evaluateCondition(cap.Conditions, call, subject, cap)
+			if err != nil {
+				return denyForCapability(cap, fmt.Sprintf("condition evaluation failed: %v", err), conditionRemediation(cap.Conditions, cap))
+			}
+			if !matched {
+				continue
+			}
+		}
+
 		// Capability matched — check constraints before honoring its decision.
 		if cap.Constraints != nil {
 			if violation, ok := checkConstraints(cap.Constraints, call); !ok {
-				return types.PolicyDecision{
-					Decision: types.Deny,
-					Reason:   violation,
-					Rule:     cap.Name,
-				}
+				return denyForCapability(cap, violation.Reason, violation.Remediation)
 			}
 		}
 
@@ -55,12 +84,12 @@ func (e *Engine) Evaluate(_ context.Context, call types.ToolCall) types.PolicyDe
 		if !normalized {
 			reason = fmt.Sprintf("invalid capability decision %q for %q; failing closed to deny", cap.Decision, cap.Name)
 		}
-
-		return types.PolicyDecision{
-			Decision: decision,
-			Reason:   reason,
-			Rule:     cap.Name,
+		if cap.Approval != nil && cap.Approval.Required && decision == types.Allow {
+			decision = types.Ask
+			reason += "; approval required by policy metadata"
 		}
+
+		return decisionForCapability(cap, decision, reason, "")
 	}
 
 	// No capability matched — fall back to file-level default.
@@ -75,6 +104,26 @@ func (e *Engine) Evaluate(_ context.Context, call types.ToolCall) types.PolicyDe
 		Reason:   reason,
 		Rule:     "default",
 	}
+}
+
+func decisionForCapability(cap Capability, decision types.Decision, reason string, remediation string) types.PolicyDecision {
+	if remediation == "" {
+		remediation = cap.Remediation
+	}
+	return types.PolicyDecision{
+		Decision:    decision,
+		Reason:      reason,
+		Rule:        cap.Name,
+		RiskLevel:   cap.RiskLevel,
+		Approval:    cap.Approval,
+		Effects:     cap.Effects,
+		Audit:       cap.Audit,
+		Remediation: remediation,
+	}
+}
+
+func denyForCapability(cap Capability, reason string, remediation string) types.PolicyDecision {
+	return decisionForCapability(cap, types.Deny, reason, remediation)
 }
 
 // normalizeDecision converts an input decision to a known enum and defaults to
@@ -92,6 +141,216 @@ func normalizeDecision(raw string) (types.Decision, bool) {
 	}
 }
 
+func evaluateCondition(cond *Condition, call types.ToolCall, subject types.PolicySubject, cap Capability) (bool, error) {
+	if cond == nil {
+		return true, nil
+	}
+
+	for i := range cond.All {
+		ok, err := evaluateCondition(&cond.All[i], call, subject, cap)
+		if err != nil || !ok {
+			return ok, err
+		}
+	}
+
+	if len(cond.Any) > 0 {
+		anyMatched := false
+		for i := range cond.Any {
+			ok, err := evaluateCondition(&cond.Any[i], call, subject, cap)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				anyMatched = true
+				break
+			}
+		}
+		if !anyMatched {
+			return false, nil
+		}
+	}
+
+	if cond.Not != nil {
+		ok, err := evaluateCondition(cond.Not, call, subject, cap)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return false, nil
+		}
+	}
+
+	if cond.Field == "" && cond.Arg == "" {
+		if len(cond.All) > 0 || len(cond.Any) > 0 || cond.Not != nil {
+			return true, nil
+		}
+		return false, fmt.Errorf("condition leaf must set field or arg")
+	}
+
+	field := cond.Field
+	if field == "" {
+		field = "args." + cond.Arg
+	}
+	value, present, err := conditionFieldValue(field, call, subject, cap)
+	if err != nil {
+		return false, err
+	}
+
+	op := strings.ToLower(strings.TrimSpace(cond.Op))
+	if op == "" {
+		op = "eq"
+	}
+	return compareConditionValue(value, present, op, cond)
+}
+
+func conditionFieldValue(field string, call types.ToolCall, subject types.PolicySubject, cap Capability) (any, bool, error) {
+	switch field {
+	case "tool":
+		return call.Tool, true, nil
+	case "action":
+		return call.Action, true, nil
+	case "role":
+		return subject.Role, subject.Role != "", nil
+	case "session", "session_id":
+		return subject.SessionID, subject.SessionID != "", nil
+	case "risk", "risk_level":
+		return cap.RiskLevel, cap.RiskLevel != "", nil
+	}
+
+	if strings.HasPrefix(field, "args.") {
+		return nestedMapValue(call.Args, strings.TrimPrefix(field, "args."))
+	}
+	if strings.HasPrefix(field, "arg.") {
+		return nestedMapValue(call.Args, strings.TrimPrefix(field, "arg."))
+	}
+
+	return nil, false, fmt.Errorf("unknown condition field %q", field)
+}
+
+func compareConditionValue(value any, present bool, op string, cond *Condition) (bool, error) {
+	switch op {
+	case "exists":
+		return present, nil
+	case "not_exists":
+		return !present, nil
+	}
+	if !present {
+		return false, nil
+	}
+
+	switch op {
+	case "eq":
+		return scalarEqual(value, cond.Value), nil
+	case "ne":
+		return !scalarEqual(value, cond.Value), nil
+	case "in":
+		for _, item := range conditionValues(cond) {
+			if scalarEqual(value, item) {
+				return true, nil
+			}
+		}
+		return false, nil
+	case "not_in":
+		for _, item := range conditionValues(cond) {
+			if scalarEqual(value, item) {
+				return false, nil
+			}
+		}
+		return true, nil
+	case "contains":
+		return containsValue(value, cond.Value), nil
+	case "starts_with":
+		text, prefix, ok := twoStrings(value, cond.Value)
+		return ok && strings.HasPrefix(text, prefix), nil
+	case "ends_with":
+		text, suffix, ok := twoStrings(value, cond.Value)
+		return ok && strings.HasSuffix(text, suffix), nil
+	case "matches":
+		text, pattern, ok := twoStrings(value, cond.Value)
+		if !ok {
+			return false, nil
+		}
+		matched, err := regexp.MatchString(pattern, text)
+		if err != nil {
+			return false, fmt.Errorf("invalid condition regex %q", pattern)
+		}
+		return matched, nil
+	case "gt", "gte", "lt", "lte":
+		left, ok := numberAsFloat(value)
+		if !ok {
+			return false, nil
+		}
+		right, ok := numberAsFloat(cond.Value)
+		if !ok {
+			return false, fmt.Errorf("condition %s requires numeric value", op)
+		}
+		switch op {
+		case "gt":
+			return left > right, nil
+		case "gte":
+			return left >= right, nil
+		case "lt":
+			return left < right, nil
+		default:
+			return left <= right, nil
+		}
+	default:
+		return false, fmt.Errorf("unknown condition op %q", op)
+	}
+}
+
+func conditionValues(cond *Condition) []any {
+	if len(cond.Values) > 0 {
+		return cond.Values
+	}
+	if values, ok := cond.Value.([]any); ok {
+		return values
+	}
+	return []any{cond.Value}
+}
+
+func nestedMapValue(values map[string]any, path string) (any, bool, error) {
+	if path == "" {
+		return nil, false, fmt.Errorf("argument condition field cannot be empty")
+	}
+	parts := strings.Split(path, ".")
+	var current any = values
+	for _, part := range parts {
+		m, ok := current.(map[string]any)
+		if !ok {
+			return nil, false, nil
+		}
+		current, ok = m[part]
+		if !ok {
+			return nil, false, nil
+		}
+	}
+	return current, true, nil
+}
+
+func conditionRemediation(cond *Condition, cap Capability) string {
+	if cond == nil {
+		return cap.Remediation
+	}
+	if cond.Remediation != "" {
+		return cond.Remediation
+	}
+	for i := range cond.All {
+		if remediation := conditionRemediation(&cond.All[i], cap); remediation != "" {
+			return remediation
+		}
+	}
+	for i := range cond.Any {
+		if remediation := conditionRemediation(&cond.Any[i], cap); remediation != "" {
+			return remediation
+		}
+	}
+	if cond.Not != nil {
+		return conditionRemediation(cond.Not, cap)
+	}
+	return cap.Remediation
+}
+
 // capabilityMatches returns true when cap covers the tool and action of call.
 func capabilityMatches(cap Capability, call types.ToolCall) bool {
 	if cap.Tool != call.Tool {
@@ -105,17 +364,44 @@ func capabilityMatches(cap Capability, call types.ToolCall) bool {
 	return false
 }
 
+func scopeMatches(scope *Scope, subject types.PolicySubject) bool {
+	if scope == nil {
+		return true
+	}
+	if len(scope.Roles) > 0 && !containsString(scope.Roles, subject.Role) {
+		return false
+	}
+	if len(scope.Sessions) > 0 && !containsString(scope.Sessions, subject.SessionID) {
+		return false
+	}
+	if len(scope.Labels) > 0 && !intersectsString(scope.Labels, subject.Labels) {
+		return false
+	}
+	return true
+}
+
+type policyViolation struct {
+	Reason      string
+	Remediation string
+}
+
 // checkConstraints evaluates all non-nil constraint groups against call.
-// It returns a human-readable violation message and false on the first
-// violation found. On success it returns ("", true).
-func checkConstraints(c *Constraints, call types.ToolCall) (string, bool) {
+// It returns a structured violation and false on the first violation found.
+// On success it returns a zero violation and true.
+func checkConstraints(c *Constraints, call types.ToolCall) (policyViolation, bool) {
+	if len(c.Arguments) > 0 {
+		if violation, ok := checkArgumentSchema(c, call.Args); !ok {
+			return violation, false
+		}
+	}
+
 	// Path constraint: look for a "path" arg in the call arguments.
 	if c.Paths != nil {
 		if rawPath, ok := call.Args["path"]; ok {
 			path, _ := rawPath.(string)
 			path = normalizePath(path)
 			if msg, ok := checkAllowDenyGlob(c.Paths, path, "path"); !ok {
-				return msg, false
+				return violation(msg, firstNonEmpty(c.Paths.Remediation, c.Remediation)), false
 			}
 		}
 	}
@@ -127,7 +413,7 @@ func checkConstraints(c *Constraints, call types.ToolCall) (string, bool) {
 		if rawCmd, ok := call.Args["command"]; ok {
 			cmd, _ := rawCmd.(string)
 			if msg, ok := checkAllowDenyShell(c.Commands, cmd, "command"); !ok {
-				return msg, false
+				return violation(msg, firstNonEmpty(c.Commands.Remediation, c.Remediation)), false
 			}
 		}
 	}
@@ -137,7 +423,7 @@ func checkConstraints(c *Constraints, call types.ToolCall) (string, bool) {
 		domain := extractDomain(call.Args)
 		if domain != "" {
 			if msg, ok := checkDomain(c.Domains, domain); !ok {
-				return msg, false
+				return violation(msg, firstNonEmpty(c.Domains.Remediation, c.Remediation)), false
 			}
 		}
 	}
@@ -146,7 +432,7 @@ func checkConstraints(c *Constraints, call types.ToolCall) (string, bool) {
 	// by tools that send or write content.
 	if c.MaxSizeBytes > 0 {
 		if size, key := payloadSize(call.Args); key != "" && size > c.MaxSizeBytes {
-			return fmt.Sprintf("%s payload size %d exceeds max_size_bytes %d", key, size, c.MaxSizeBytes), false
+			return violation(fmt.Sprintf("%s payload size %d exceeds max_size_bytes %d", key, size, c.MaxSizeBytes), c.Remediation), false
 		}
 	}
 
@@ -154,11 +440,237 @@ func checkConstraints(c *Constraints, call types.ToolCall) (string, bool) {
 	// not exceed the capability-level timeout limit.
 	if c.TimeoutSeconds > 0 {
 		if timeout, ok := timeoutSeconds(call.Args); ok && timeout > c.TimeoutSeconds {
-			return fmt.Sprintf("timeout %d exceeds timeout_seconds %d", timeout, c.TimeoutSeconds), false
+			return violation(fmt.Sprintf("timeout %d exceeds timeout_seconds %d", timeout, c.TimeoutSeconds), c.Remediation), false
+		}
+	}
+
+	return policyViolation{}, true
+}
+
+func violation(reason string, remediation string) policyViolation {
+	return policyViolation{Reason: reason, Remediation: remediation}
+}
+
+func checkArgumentSchema(c *Constraints, args map[string]any) (policyViolation, bool) {
+	for name, spec := range c.Arguments {
+		value, ok := args[name]
+		if !ok {
+			if spec.Required {
+				return violation(fmt.Sprintf("argument %q is required", name), firstNonEmpty(spec.Remediation, c.Remediation)), false
+			}
+			continue
+		}
+		if reason, ok := validateArgument(value, spec, "argument "+strconv.Quote(name)); !ok {
+			return violation(reason, firstNonEmpty(spec.Remediation, c.Remediation)), false
+		}
+	}
+
+	if !c.AllowUnknownArgs {
+		for name := range args {
+			if _, ok := c.Arguments[name]; !ok {
+				return violation(fmt.Sprintf("argument %q is not allowed by schema", name), c.Remediation), false
+			}
+		}
+	}
+
+	return policyViolation{}, true
+}
+
+func validateArgument(value any, spec ArgumentSpec, label string) (string, bool) {
+	if spec.Type != "" && !argumentTypeMatches(value, spec.Type) {
+		return fmt.Sprintf("%s must be %s", label, spec.Type), false
+	}
+
+	if len(spec.Enum) > 0 {
+		allowedValue := false
+		for _, allowed := range spec.Enum {
+			if scalarEqual(value, allowed) {
+				allowedValue = true
+				break
+			}
+		}
+		if !allowedValue {
+			return fmt.Sprintf("%s is not one of the allowed values", label), false
+		}
+	}
+
+	if spec.Pattern != "" {
+		text, ok := value.(string)
+		if !ok {
+			return fmt.Sprintf("%s must be string to match pattern", label), false
+		}
+		matched, err := regexp.MatchString(spec.Pattern, text)
+		if err != nil {
+			return fmt.Sprintf("%s has invalid schema pattern %q", label, spec.Pattern), false
+		}
+		if !matched {
+			return fmt.Sprintf("%s does not match required pattern", label), false
+		}
+	}
+
+	if spec.Min != nil || spec.Max != nil {
+		number, ok := numberAsFloat(value)
+		if !ok {
+			return fmt.Sprintf("%s must be numeric for min/max validation", label), false
+		}
+		if spec.Min != nil && number < *spec.Min {
+			return fmt.Sprintf("%s must be at least %v", label, trimFloat(*spec.Min)), false
+		}
+		if spec.Max != nil && number > *spec.Max {
+			return fmt.Sprintf("%s must be at most %v", label, trimFloat(*spec.Max)), false
+		}
+	}
+
+	if spec.MinLength != nil || spec.MaxLength != nil {
+		length, ok := valueLength(value)
+		if !ok {
+			return fmt.Sprintf("%s must have a measurable length", label), false
+		}
+		if spec.MinLength != nil && length < *spec.MinLength {
+			return fmt.Sprintf("%s length must be at least %d", label, *spec.MinLength), false
+		}
+		if spec.MaxLength != nil && length > *spec.MaxLength {
+			return fmt.Sprintf("%s length must be at most %d", label, *spec.MaxLength), false
+		}
+	}
+
+	if spec.Items != nil {
+		items, ok := sliceValues(value)
+		if !ok {
+			return fmt.Sprintf("%s must be an array for item validation", label), false
+		}
+		for i, item := range items {
+			if reason, ok := validateArgument(item, *spec.Items, fmt.Sprintf("%s[%d]", label, i)); !ok {
+				return reason, false
+			}
+		}
+	}
+
+	if len(spec.Properties) > 0 {
+		props, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Sprintf("%s must be an object for property validation", label), false
+		}
+		for name, child := range spec.Properties {
+			childValue, ok := props[name]
+			if !ok {
+				if child.Required {
+					return fmt.Sprintf("%s.%s is required", label, name), false
+				}
+				continue
+			}
+			if reason, ok := validateArgument(childValue, child, label+"."+name); !ok {
+				return reason, false
+			}
 		}
 	}
 
 	return "", true
+}
+
+func argumentTypeMatches(value any, want string) bool {
+	switch strings.ToLower(strings.TrimSpace(want)) {
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "number":
+		_, ok := numberAsFloat(value)
+		return ok
+	case "integer":
+		return isInteger(value)
+	case "boolean", "bool":
+		_, ok := value.(bool)
+		return ok
+	case "array":
+		_, ok := sliceValues(value)
+		return ok
+	case "object":
+		_, ok := value.(map[string]any)
+		return ok
+	default:
+		return false
+	}
+}
+
+func sliceValues(value any) ([]any, bool) {
+	switch v := value.(type) {
+	case []any:
+		return v, true
+	case []string:
+		out := make([]any, len(v))
+		for i := range v {
+			out[i] = v[i]
+		}
+		return out, true
+	case []int:
+		out := make([]any, len(v))
+		for i := range v {
+			out[i] = v[i]
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func valueLength(value any) (int, bool) {
+	switch v := value.(type) {
+	case string:
+		return len(v), true
+	default:
+		items, ok := sliceValues(value)
+		return len(items), ok
+	}
+}
+
+func isInteger(value any) bool {
+	switch v := value.(type) {
+	case int, int8, int16, int32, int64:
+		return true
+	case uint, uint8, uint16, uint32, uint64:
+		return true
+	case float64:
+		return v == float64(int64(v))
+	case float32:
+		return v == float32(int64(v))
+	default:
+		return false
+	}
+}
+
+func numberAsFloat(value any) (float64, bool) {
+	switch v := value.(type) {
+	case int:
+		return float64(v), true
+	case int8:
+		return float64(v), true
+	case int16:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case uint:
+		return float64(v), true
+	case uint8:
+		return float64(v), true
+	case uint16:
+		return float64(v), true
+	case uint32:
+		return float64(v), true
+	case uint64:
+		return float64(v), true
+	case float32:
+		return float64(v), true
+	case float64:
+		return v, true
+	default:
+		return 0, false
+	}
+}
+
+func trimFloat(value float64) string {
+	return strconv.FormatFloat(value, 'f', -1, 64)
 }
 
 // payloadSize returns the byte size of the first known payload arg present in
@@ -421,4 +933,78 @@ func normalizePath(path string) string {
 		return path
 	}
 	return filepath.Clean(path)
+}
+
+func scalarEqual(left any, right any) bool {
+	if reflect.DeepEqual(left, right) {
+		return true
+	}
+
+	leftNumber, leftOK := numberAsFloat(left)
+	rightNumber, rightOK := numberAsFloat(right)
+	if leftOK && rightOK {
+		return leftNumber == rightNumber
+	}
+
+	leftString, leftOK := left.(string)
+	rightString, rightOK := right.(string)
+	if leftOK && rightOK {
+		return leftString == rightString
+	}
+
+	leftBool, leftOK := left.(bool)
+	rightBool, rightOK := right.(bool)
+	return leftOK && rightOK && leftBool == rightBool
+}
+
+func containsValue(container any, needle any) bool {
+	switch v := container.(type) {
+	case string:
+		needleText, ok := needle.(string)
+		return ok && strings.Contains(v, needleText)
+	default:
+		items, ok := sliceValues(container)
+		if !ok {
+			return false
+		}
+		for _, item := range items {
+			if scalarEqual(item, needle) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func twoStrings(left any, right any) (string, string, bool) {
+	leftString, leftOK := left.(string)
+	rightString, rightOK := right.(string)
+	return leftString, rightString, leftOK && rightOK
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func intersectsString(left []string, right []string) bool {
+	for _, item := range left {
+		if containsString(right, item) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

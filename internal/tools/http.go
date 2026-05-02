@@ -1,14 +1,28 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
 func (r *Registry) HTTPGet(ctx context.Context, req HTTPGetArgs) (string, error) {
+	return r.httpRequest(ctx, http.MethodGet, req.URL, "", "")
+}
+
+func (r *Registry) HTTPPost(ctx context.Context, req HTTPPostArgs) (string, error) {
+	contentType := strings.TrimSpace(req.ContentType)
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	return r.httpRequest(ctx, http.MethodPost, req.URL, req.Body, contentType)
+}
+
+func (r *Registry) httpRequest(ctx context.Context, method string, rawURL string, body string, contentType string) (string, error) {
 	timeout := 5 * time.Second
 	limit := int64(64 * 1024)
 
@@ -25,9 +39,17 @@ func (r *Registry) HTTPGet(ctx context.Context, req HTTPGetArgs) (string, error)
 	ctx, cancel = context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	reqHTTP, err := http.NewRequestWithContext(ctx, http.MethodGet, req.URL, nil)
+	var bodyReader io.Reader
+	if method == http.MethodPost {
+		bodyReader = bytes.NewReader([]byte(body))
+	}
+
+	reqHTTP, err := http.NewRequestWithContext(ctx, method, rawURL, bodyReader)
 	if err != nil {
-		return "", fmt.Errorf("http get request: %w", err)
+		return "", fmt.Errorf("http %s request: %w", strings.ToLower(method), err)
+	}
+	if contentType != "" {
+		reqHTTP.Header.Set("Content-Type", contentType)
 	}
 
 	client := &http.Client{
@@ -38,19 +60,19 @@ func (r *Registry) HTTPGet(ctx context.Context, req HTTPGetArgs) (string, error)
 	}
 	resp, err := client.Do(reqHTTP)
 	if err != nil {
-		return "", fmt.Errorf("http get: %w", err)
+		return "", fmt.Errorf("http %s: %w", strings.ToLower(method), err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return "", fmt.Errorf("http get body: %w", err)
+		return "", fmt.Errorf("http %s body: %w", strings.ToLower(method), err)
 	}
-	if int64(len(body)) > limit {
-		return "", fmt.Errorf("http get response exceeds %d bytes", limit)
+	if int64(len(responseBody)) > limit {
+		return "", fmt.Errorf("http %s response exceeds %d bytes", strings.ToLower(method), limit)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("http get returned %s: %s", resp.Status, string(body))
+		return "", fmt.Errorf("http %s returned %s: %s", strings.ToLower(method), resp.Status, string(responseBody))
 	}
-	return string(body), nil
+	return string(responseBody), nil
 }

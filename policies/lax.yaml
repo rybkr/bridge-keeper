@@ -43,5 +43,5 @@ capabilities:
 
   - name: pkg-ops
     tool: pkg
-    actions: [list, install]
+    actions: [list, query, install, update]
     decision: ask

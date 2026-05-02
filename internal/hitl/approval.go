@@ -74,7 +74,17 @@ func (t *TerminalApprover) Approve(ctx context.Context, call types.ToolCall, dec
 	default:
 	}
 
-	line, err := t.session.ReadLine(fmt.Sprintf("Approve tool call? tool=%s action=%s reason=%s [y/N]: ", call.Tool, call.Action, decision.Reason))
+	prompt := fmt.Sprintf("Approve tool call? tool=%s action=%s reason=%s", call.Tool, call.Action, decision.Reason)
+	if decision.RiskLevel != "" {
+		prompt += fmt.Sprintf(" risk=%s", decision.RiskLevel)
+	}
+	if decision.Approval != nil && decision.Approval.Message != "" {
+		prompt += fmt.Sprintf(" approval=%s", decision.Approval.Message)
+	}
+	if decision.Remediation != "" {
+		prompt += fmt.Sprintf(" remediation=%s", decision.Remediation)
+	}
+	line, err := t.session.ReadLine(prompt + " [y/N]: ")
 	if err != nil {
 		return false, err
 	}

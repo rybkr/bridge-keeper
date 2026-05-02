@@ -5,20 +5,66 @@ capabilities:
     tool: fs
     actions: [read_file, list_dir]
     decision: allow
+    risk_level: low
+    effects:
+      - type: filesystem
+        resource: path
+        mode: read
+    audit:
+      required: false
+      level: info
+      events: [decision, execution]
+    constraints:
+      arguments:
+        path:
+          type: string
+          required: true
 
   - name: write-files
     tool: fs
     actions: [write_file]
     decision: ask
+    risk_level: medium
+    approval:
+      required: true
+      reason: "filesystem writes can modify the workspace"
+      message: "Review the destination path and content before approving."
+    effects:
+      - type: filesystem
+        resource: path
+        mode: write
+    remediation: "Use a workspace-local path and keep generated content bounded."
     constraints:
+      arguments:
+        path:
+          type: string
+          required: true
+        content:
+          type: string
+          required: true
       paths:
         deny: ["/etc/**", "/usr/**", "/sys/**"]
+        remediation: "Choose a non-system path inside the workspace."
 
   - name: safe-shell
     tool: shell
     actions: [exec]
     decision: ask
+    risk_level: high
+    approval:
+      required: true
+      reason: "shell execution can affect local state"
+      message: "Review the exact command before approving."
+    effects:
+      - type: process
+        resource: command
+        mode: execute
+    remediation: "Use one of the listed read-only shell commands."
     constraints:
+      arguments:
+        command:
+          type: string
+          required: true
       commands:
         allow: ["echo *", "cat *", "ls *", "grep *", "wc *", "head *", "tail *"]
         deny: ["rm *", "sudo *", "chmod *", "chown *", "mkfs *", "dd *"]
@@ -27,21 +73,76 @@ capabilities:
     tool: git
     actions: [status, log, diff, show, branch]
     decision: allow
+    risk_level: low
+    effects:
+      - type: git
+        resource: repository
+        mode: read
 
   - name: http-fetch
     tool: http
     actions: [get]
     decision: allow
+    risk_level: medium
+    effects:
+      - type: network
+        resource: url
+        mode: read
+    remediation: "Use a public HTTP(S) endpoint that is not on the deny list."
     constraints:
+      arguments:
+        url:
+          type: string
+          required: true
+          pattern: "^https?://"
       domains:
         deny: ["*.internal.corp", "localhost", "127.0.0.1"]
+        remediation: "Use an external domain instead of localhost or internal hosts."
 
   - name: http-post
     tool: http
     actions: [post]
     decision: ask
+    risk_level: high
+    approval:
+      required: true
+      reason: "HTTP POST can send data to remote services"
+    effects:
+      - type: network
+        resource: url
+        mode: write
+    remediation: "Use a public HTTP(S) endpoint and keep the request body bounded."
+    constraints:
+      arguments:
+        url:
+          type: string
+          required: true
+          pattern: "^https?://"
+        body:
+          type: string
+          required: true
+        content_type:
+          type: string
 
   - name: pkg-ops
     tool: pkg
-    actions: [list, install]
+    actions: [list, query, install, update]
     decision: ask
+    risk_level: high
+    approval:
+      required: true
+      reason: "package operations can change the local environment"
+    effects:
+      - type: package
+        resource: dependency
+        mode: write
+    constraints:
+      arguments:
+        manager:
+          type: string
+        package:
+          type: string
+        version:
+          type: string
+        path:
+          type: string

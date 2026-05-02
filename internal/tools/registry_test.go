@@ -116,10 +116,95 @@ func TestHTTPGet(t *testing.T) {
 	}
 }
 
+func TestHTTPPost(t *testing.T) {
+	validator, err := sandbox.NewValidator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(t.TempDir(), validator)
+	registry.HTTPClient = &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodPost {
+				t.Fatalf("method = %s, want POST", req.Method)
+			}
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(body) != `{"ok":true}` {
+				t.Fatalf("body = %q", string(body))
+			}
+			if got := req.Header.Get("Content-Type"); got != "application/json" {
+				t.Fatalf("content-type = %q", got)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Body:       io.NopCloser(strings.NewReader("accepted")),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	got, err := registry.HTTPPost(context.Background(), HTTPPostArgs{URL: "https://example.com/data", Body: `{"ok":true}`})
+	if err != nil {
+		t.Fatalf("HTTPPost() error = %v", err)
+	}
+	if got != "accepted" {
+		t.Fatalf("HTTPPost() = %q, want accepted", got)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func TestExecuteShellCommand(t *testing.T) {
+	validator, err := sandbox.NewValidator(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(t.TempDir(), validator)
+
+	got, err := registry.ExecuteShellCommand(context.Background(), ShellExecArgs{Command: "echo hello"})
+	if err != nil {
+		t.Fatalf("ExecuteShellCommand() error = %v", err)
+	}
+	if strings.TrimSpace(got) != "hello" {
+		t.Fatalf("ExecuteShellCommand() = %q, want hello", got)
+	}
+}
+
+func TestPackageListUsesGoModules(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := t.TempDir()
+	goPath := filepath.Join(binDir, "go")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\"\n"
+	if err := os.WriteFile(goPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	validator, err := sandbox.NewValidator(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewRegistry(dir, validator)
+
+	got, err := registry.PackageList(context.Background(), PackageListArgs{})
+	if err != nil {
+		t.Fatalf("PackageList() error = %v", err)
+	}
+	if strings.TrimSpace(got) != "list -m all" {
+		t.Fatalf("PackageList() = %q, want go list args", got)
+	}
 }
 
 func TestRunSubprocess_Timeout(t *testing.T) {

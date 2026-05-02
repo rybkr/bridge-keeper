@@ -26,6 +26,7 @@ type Mediator struct {
 	Audit    *audit.Logger
 	Sandbox  *sandbox.Validator
 	Redactor *redact.Redactor
+	Subject  types.PolicySubject
 }
 
 // Execute evaluates policy, optionally requests approval, audits the outcome,
@@ -60,15 +61,33 @@ func (m *Mediator) Execute(ctx context.Context, call types.ToolCall, handler Han
 		"args":   m.redactValue(call.Args),
 	})
 
-	decision := m.Policy.Evaluate(ctx, call)
+	policyCtx := ctx
+	if _, ok := policy.SubjectFromContext(policyCtx); !ok && !emptySubject(m.Subject) {
+		policyCtx = policy.WithSubject(policyCtx, m.Subject)
+	}
+	decision := m.Policy.Evaluate(policyCtx, call)
 	m.Audit.Log(audit.Info, "policy_decision", map[string]any{
-		"id":       call.ID,
-		"tool":     call.Tool,
-		"action":   call.Action,
-		"decision": decision.Decision,
-		"rule":     decision.Rule,
-		"reason":   decision.Reason,
+		"id":          call.ID,
+		"tool":        call.Tool,
+		"action":      call.Action,
+		"decision":    decision.Decision,
+		"rule":        decision.Rule,
+		"reason":      decision.Reason,
+		"risk_level":  decision.RiskLevel,
+		"effects":     decision.Effects,
+		"approval":    decision.Approval,
+		"audit":       decision.Audit,
+		"remediation": decision.Remediation,
 	})
+
+	if decision.Audit != nil && decision.Audit.Required && !m.Audit.Enabled() {
+		return denied(types.PolicyDecision{
+			Decision:    types.Deny,
+			Rule:        decision.Rule,
+			Reason:      "audit required by policy but no audit logger is configured",
+			Remediation: "configure an audit logger or use a policy rule without audit.required",
+		}), nil
+	}
 
 	switch decision.Decision {
 	case types.Deny:
@@ -76,14 +95,16 @@ func (m *Mediator) Execute(ctx context.Context, call types.ToolCall, handler Han
 	case types.Ask:
 		if m.Approver == nil {
 			m.Audit.Log(audit.Warning, "approval_missing", map[string]any{
-				"id":     call.ID,
-				"tool":   call.Tool,
-				"action": call.Action,
+				"id":       call.ID,
+				"tool":     call.Tool,
+				"action":   call.Action,
+				"approval": decision.Approval,
 			})
 			return denied(types.PolicyDecision{
-				Decision: types.Deny,
-				Rule:     decision.Rule,
-				Reason:   "approval required but no approver configured",
+				Decision:    types.Deny,
+				Rule:        decision.Rule,
+				Reason:      "approval required but no approver configured",
+				Remediation: decision.Remediation,
 			}), nil
 		}
 		approved, err := m.Approver.Approve(ctx, call, decision)
@@ -96,20 +117,23 @@ func (m *Mediator) Execute(ctx context.Context, call types.ToolCall, handler Han
 		}
 		if !approved {
 			m.Audit.Log(audit.Warning, "approval_denied", map[string]any{
-				"id":     call.ID,
-				"tool":   call.Tool,
-				"action": call.Action,
+				"id":       call.ID,
+				"tool":     call.Tool,
+				"action":   call.Action,
+				"approval": decision.Approval,
 			})
 			return denied(types.PolicyDecision{
-				Decision: types.Deny,
-				Rule:     decision.Rule,
-				Reason:   "request denied by approver",
+				Decision:    types.Deny,
+				Rule:        decision.Rule,
+				Reason:      "request denied by approver",
+				Remediation: decision.Remediation,
 			}), nil
 		}
 		m.Audit.Log(audit.Info, "approval_granted", map[string]any{
-			"id":     call.ID,
-			"tool":   call.Tool,
-			"action": call.Action,
+			"id":       call.ID,
+			"tool":     call.Tool,
+			"action":   call.Action,
+			"approval": decision.Approval,
 		})
 	}
 
@@ -153,6 +177,9 @@ func (m *Mediator) Execute(ctx context.Context, call types.ToolCall, handler Han
 }
 
 func denied(decision types.PolicyDecision) string {
+	if decision.Remediation != "" {
+		return fmt.Sprintf("Error: execution denied. Reason: %s Remediation: %s", decision.Reason, decision.Remediation)
+	}
 	return fmt.Sprintf("Error: execution denied. Reason: %s", decision.Reason)
 }
 
@@ -189,4 +216,8 @@ func (m *Mediator) detect(text string) redact.Classification {
 		return redact.Classification{}
 	}
 	return m.Redactor.Detect(text)
+}
+
+func emptySubject(subject types.PolicySubject) bool {
+	return subject.Role == "" && subject.SessionID == "" && len(subject.Labels) == 0
 }

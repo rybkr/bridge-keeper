@@ -42,3 +42,38 @@ type ListDirectoryArgs struct {
 type HTTPGetArgs struct {
 	URL string
 }
+
+type HTTPPostArgs struct {
+	URL         string
+	Body        string
+	ContentType string
+}
+
+type ShellExecArgs struct {
+	Command string
+	Path    string
+}
+
+type PackageListArgs struct {
+	Manager string
+	Path    string
+}
+
+type PackageQueryArgs struct {
+	Manager string
+	Package string
+	Path    string
+}
+
+type PackageInstallArgs struct {
+	Manager string
+	Package string
+	Version string
+	Path    string
+}
+
+type PackageUpdateArgs struct {
+	Manager string
+	Package string
+	Path    string
+}

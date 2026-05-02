@@ -557,3 +557,178 @@ func TestEvaluate_DomainParsingUsesURLHostname(t *testing.T) {
 		t.Fatalf("want Deny after hostname extraction, got %q", got.Decision)
 	}
 }
+
+func TestEvaluate_ScopeUsesPolicySubject(t *testing.T) {
+	pf := &PolicyFile{
+		Default: "deny",
+		Capabilities: []Capability{
+			{
+				Name:     "developer-shell",
+				Tool:     "shell",
+				Actions:  []string{"exec"},
+				Decision: "allow",
+				Scope: &Scope{
+					Roles: []string{"developer"},
+				},
+			},
+		},
+	}
+	eng := makeEngine(pf)
+
+	unscoped := eng.Evaluate(context.Background(), call("shell", "exec", nil))
+	if unscoped.Decision != types.Deny || unscoped.Rule != "default" {
+		t.Fatalf("unscoped call should fall through to default deny, got %+v", unscoped)
+	}
+
+	ctx := WithSubject(context.Background(), types.PolicySubject{Role: "developer", SessionID: "s-1"})
+	scoped := eng.Evaluate(ctx, call("shell", "exec", nil))
+	if scoped.Decision != types.Allow || scoped.Rule != "developer-shell" {
+		t.Fatalf("scoped call should match role rule, got %+v", scoped)
+	}
+}
+
+func TestEvaluate_ConditionsFilterCapabilities(t *testing.T) {
+	pf := &PolicyFile{
+		Default: "deny",
+		Capabilities: []Capability{
+			{
+				Name:     "read-markdown",
+				Tool:     "fs",
+				Actions:  []string{"read_file"},
+				Decision: "allow",
+				Conditions: &Condition{
+					All: []Condition{
+						{Arg: "path", Op: "starts_with", Value: "/workspace/"},
+						{Arg: "path", Op: "ends_with", Value: ".md"},
+					},
+				},
+			},
+		},
+	}
+	eng := makeEngine(pf)
+
+	allowed := eng.Evaluate(context.Background(), call("fs", "read_file", map[string]any{"path": "/workspace/README.md"}))
+	if allowed.Decision != types.Allow {
+		t.Fatalf("markdown path should be allowed, got %+v", allowed)
+	}
+
+	denied := eng.Evaluate(context.Background(), call("fs", "read_file", map[string]any{"path": "/workspace/main.go"}))
+	if denied.Decision != types.Deny || denied.Rule != "default" {
+		t.Fatalf("non-matching condition should fall through to default deny, got %+v", denied)
+	}
+}
+
+func TestEvaluate_InvalidConditionFailsClosed(t *testing.T) {
+	pf := &PolicyFile{
+		Default: "allow",
+		Capabilities: []Capability{
+			{
+				Name:        "bad-condition",
+				Tool:        "fs",
+				Actions:     []string{"read_file"},
+				Decision:    "allow",
+				Conditions:  &Condition{Field: "args.path", Op: "matches", Value: "["},
+				Remediation: "fix the policy regex",
+			},
+		},
+	}
+
+	got := makeEngine(pf).Evaluate(context.Background(), call("fs", "read_file", map[string]any{"path": "README.md"}))
+	if got.Decision != types.Deny {
+		t.Fatalf("invalid condition should fail closed, got %+v", got)
+	}
+	if got.Remediation != "fix the policy regex" {
+		t.Fatalf("expected remediation to be propagated, got %q", got.Remediation)
+	}
+}
+
+func TestEvaluate_ArgumentSchemaValidation(t *testing.T) {
+	maxLen := 12
+	pf := &PolicyFile{
+		Default: "deny",
+		Capabilities: []Capability{
+			{
+				Name:     "bounded-write",
+				Tool:     "fs",
+				Actions:  []string{"write_file"},
+				Decision: "allow",
+				Constraints: &Constraints{
+					Arguments: map[string]ArgumentSpec{
+						"path": {
+							Type:     "string",
+							Required: true,
+							Pattern:  `^/workspace/[^/]+\.txt$`,
+						},
+						"content": {
+							Type:        "string",
+							Required:    true,
+							MaxLength:   &maxLen,
+							Remediation: "write a smaller text file",
+						},
+					},
+				},
+			},
+		},
+	}
+	eng := makeEngine(pf)
+
+	allowed := eng.Evaluate(context.Background(), call("fs", "write_file", map[string]any{
+		"path":    "/workspace/notes.txt",
+		"content": "hello",
+	}))
+	if allowed.Decision != types.Allow {
+		t.Fatalf("valid args should be allowed, got %+v", allowed)
+	}
+
+	missing := eng.Evaluate(context.Background(), call("fs", "write_file", map[string]any{
+		"content": "hello",
+	}))
+	if missing.Decision != types.Deny {
+		t.Fatalf("missing required arg should deny, got %+v", missing)
+	}
+
+	tooLarge := eng.Evaluate(context.Background(), call("fs", "write_file", map[string]any{
+		"path":    "/workspace/notes.txt",
+		"content": "this is too long",
+	}))
+	if tooLarge.Decision != types.Deny {
+		t.Fatalf("oversized content should deny, got %+v", tooLarge)
+	}
+	if tooLarge.Remediation != "write a smaller text file" {
+		t.Fatalf("schema remediation should be used, got %q", tooLarge.Remediation)
+	}
+}
+
+func TestEvaluate_MetadataIsReturnedAndApprovalCanForceAsk(t *testing.T) {
+	pf := &PolicyFile{
+		Default: "deny",
+		Capabilities: []Capability{
+			{
+				Name:      "deploy",
+				Tool:      "shell",
+				Actions:   []string{"exec"},
+				Decision:  "allow",
+				RiskLevel: "high",
+				Approval: &types.ApprovalMetadata{
+					Required:  true,
+					Reason:    "deployment changes production",
+					Approvers: []string{"ops"},
+				},
+				Effects: []types.Effect{
+					{Type: "process", Resource: "deploy", Mode: "execute"},
+				},
+				Audit: &types.AuditRequirement{Required: true, Level: "info"},
+			},
+		},
+	}
+
+	got := makeEngine(pf).Evaluate(context.Background(), call("shell", "exec", map[string]any{
+		"command": "deploy production",
+	}))
+	if got.Decision != types.Ask {
+		t.Fatalf("approval metadata should force ask, got %+v", got)
+	}
+	if got.RiskLevel != "high" || got.Approval == nil || len(got.Effects) != 1 || got.Audit == nil {
+		t.Fatalf("expected metadata to be returned, got %+v", got)
+	}
+}

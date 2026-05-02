@@ -186,6 +186,50 @@ func (agent *GeminiAgent) executeTool(ctx context.Context, name string, args map
 			return "Error: url argument is invalid or empty.", nil
 		}
 		return agent.registry.HTTPGet(ctx, tools.HTTPGetArgs{URL: urlStr})
+	case "http_post":
+		urlStr, ok := stringArg(args, "url")
+		if !ok {
+			return "Error: url argument is invalid or empty.", nil
+		}
+		bodyStr, ok := stringArg(args, "body")
+		if !ok {
+			return "Error: body argument is invalid or empty.", nil
+		}
+		contentType, _ := stringArg(args, "content_type")
+		return agent.registry.HTTPPost(ctx, tools.HTTPPostArgs{URL: urlStr, Body: bodyStr, ContentType: contentType})
+	case "shell_exec":
+		command, ok := stringArg(args, "command")
+		if !ok {
+			return "Error: command argument is invalid or empty.", nil
+		}
+		path, _ := stringArg(args, "path")
+		return agent.registry.ExecuteShellCommand(ctx, tools.ShellExecArgs{Command: command, Path: path})
+	case "pkg_list":
+		manager, _ := stringArg(args, "manager")
+		path, _ := stringArg(args, "path")
+		return agent.registry.PackageList(ctx, tools.PackageListArgs{Manager: manager, Path: path})
+	case "pkg_query":
+		manager, _ := stringArg(args, "manager")
+		pkg, ok := stringArg(args, "package")
+		if !ok {
+			return "Error: package argument is invalid or empty.", nil
+		}
+		path, _ := stringArg(args, "path")
+		return agent.registry.PackageQuery(ctx, tools.PackageQueryArgs{Manager: manager, Package: pkg, Path: path})
+	case "pkg_install":
+		manager, _ := stringArg(args, "manager")
+		pkg, ok := stringArg(args, "package")
+		if !ok {
+			return "Error: package argument is invalid or empty.", nil
+		}
+		version, _ := stringArg(args, "version")
+		path, _ := stringArg(args, "path")
+		return agent.registry.PackageInstall(ctx, tools.PackageInstallArgs{Manager: manager, Package: pkg, Version: version, Path: path})
+	case "pkg_update":
+		manager, _ := stringArg(args, "manager")
+		pkg, _ := stringArg(args, "package")
+		path, _ := stringArg(args, "path")
+		return agent.registry.PackageUpdate(ctx, tools.PackageUpdateArgs{Manager: manager, Package: pkg, Path: path})
 	case "list_directory":
 		if pathAny, exists := args["path"]; exists {
 			if pathStr, ok := pathAny.(string); ok && pathStr != "" {
@@ -195,6 +239,41 @@ func (agent *GeminiAgent) executeTool(ctx context.Context, name string, args map
 		return agent.registry.ListDirectory(ctx, tools.ListDirectoryArgs{Path: agent.lastPath})
 	default:
 		return fmt.Sprintf("Error: Unknown function %s called.", name), nil
+	}
+}
+
+func stringArg(args map[string]any, key string) (string, bool) {
+	raw, ok := args[key]
+	if !ok {
+		return "", false
+	}
+	value, ok := raw.(string)
+	value = strings.TrimSpace(value)
+	return value, ok && value != ""
+}
+
+func packageToolSchema(required []string) *genai.Schema {
+	return &genai.Schema{
+		Type: genai.TypeObject,
+		Properties: map[string]*genai.Schema{
+			"manager": {
+				Type:        genai.TypeString,
+				Description: "The package manager to use: go or cargo. If omitted, Bridgekeeper detects go.mod or Cargo.toml.",
+			},
+			"package": {
+				Type:        genai.TypeString,
+				Description: "The package, module, or crate name.",
+			},
+			"version": {
+				Type:        genai.TypeString,
+				Description: "Optional version for dependency installation.",
+			},
+			"path": {
+				Type:        genai.TypeString,
+				Description: "The project directory. Defaults to the workspace root.",
+			},
+		},
+		Required: required,
 	}
 }
 
@@ -267,6 +346,66 @@ func (agent *GeminiAgent) getChatConfig(conciseMode bool) *genai.GenerateContent
 				},
 			},
 			{
+				Name:        "http_post",
+				Description: "Sends a bounded HTTP POST request to an HTTP or HTTPS URL.",
+				Parameters: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"url": {
+							Type:        genai.TypeString,
+							Description: "The HTTP or HTTPS URL to send the request to.",
+						},
+						"body": {
+							Type:        genai.TypeString,
+							Description: "The request body to send.",
+						},
+						"content_type": {
+							Type:        genai.TypeString,
+							Description: "The request content type. Defaults to application/json.",
+						},
+					},
+					Required: []string{"url", "body"},
+				},
+			},
+			{
+				Name:        "shell_exec",
+				Description: "Runs a simple allowlisted local command without shell metacharacters.",
+				Parameters: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"command": {
+							Type:        genai.TypeString,
+							Description: "The exact command to run, for example 'ls .' or 'wc README.md'.",
+						},
+						"path": {
+							Type:        genai.TypeString,
+							Description: "The workspace directory to run the command in.",
+						},
+					},
+					Required: []string{"command"},
+				},
+			},
+			{
+				Name:        "pkg_list",
+				Description: "Lists dependencies for a Go module or Cargo project.",
+				Parameters:  packageToolSchema([]string{}),
+			},
+			{
+				Name:        "pkg_query",
+				Description: "Queries available versions or registry information for a package.",
+				Parameters:  packageToolSchema([]string{"package"}),
+			},
+			{
+				Name:        "pkg_install",
+				Description: "Adds or updates a dependency in a Go module or Cargo project.",
+				Parameters:  packageToolSchema([]string{"package"}),
+			},
+			{
+				Name:        "pkg_update",
+				Description: "Updates dependencies in a Go module or Cargo project.",
+				Parameters:  packageToolSchema([]string{}),
+			},
+			{
 				Name:        "list_directory",
 				Description: "Lists the contents of a specified directory. Use this to explore the repository structure, find files, or check for the presence of specific items.",
 				Parameters: &genai.Schema{
@@ -312,8 +451,12 @@ func geminiToolFamily(name string) string {
 	switch name {
 	case "execute_git_command":
 		return "git"
-	case "http_get":
+	case "http_get", "http_post":
 		return "http"
+	case "shell_exec":
+		return "shell"
+	case "pkg_list", "pkg_query", "pkg_install", "pkg_update":
+		return "pkg"
 	case "read_file", "write_file", "list_directory":
 		return "fs"
 	default:
@@ -336,6 +479,18 @@ func geminiActionName(name string, args map[string]any) string {
 		return "write_file"
 	case "http_get":
 		return "get"
+	case "http_post":
+		return "post"
+	case "shell_exec":
+		return "exec"
+	case "pkg_list":
+		return "list"
+	case "pkg_query":
+		return "query"
+	case "pkg_install":
+		return "install"
+	case "pkg_update":
+		return "update"
 	case "list_directory":
 		return "list_dir"
 	default:

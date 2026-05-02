@@ -5,7 +5,9 @@ A security-constrained agent runtime that enforces capability-based security for
 Bridgekeeper treats the agent as an untrusted program: it can propose tool calls, but the runtime mediates execution through a policy engine, local sandbox validation, human approval for `ask` decisions, and structured audit logging. Tool inputs are normalized before execution, and sensitive tool output is redacted before it is handed back to the model.
 
 Current state:
-- Policy evaluation for tool/action/capability matching is implemented.
+- Policy evaluation supports tool/action capabilities, conditional expressions,
+  role/session scoping, argument schemas, risk/approval/effect/audit metadata,
+  and explainable remediation.
 - Local sandbox enforcement currently focuses on workspace-bounded filesystem access, argument validation, and output-size limits.
 - Audit logging is structured JSONL.
 - Sensitive output redaction and simple taint detection are implemented.

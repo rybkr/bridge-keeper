@@ -44,6 +44,11 @@ func NewLogger(out io.Writer, minLevel Severity) *Logger {
 	}
 }
 
+// Enabled reports whether this logger will persist audit events at any level.
+func (l *Logger) Enabled() bool {
+	return l != nil && l.out != nil
+}
+
 // Log emits a JSONL audit event. Errors are intentionally ignored because audit
 // failures must not crash the runtime.
 func (l *Logger) Log(severity Severity, message string, fields map[string]any) {

@@ -67,6 +67,41 @@ func TestSecretWorkflowFixture_RedactsOutput(t *testing.T) {
 	}
 }
 
+func TestDefaultPolicyRejectsUnsafeGitReadArgs(t *testing.T) {
+	mediator := newFixtureMediator(t)
+	calls := []types.ToolCall{
+		{
+			ID:     "git-diff-no-index",
+			Tool:   "git",
+			Action: "diff",
+			Args: map[string]any{
+				"args": []any{"diff", "--no-index", "/etc/passwd", "/dev/null"},
+			},
+		},
+		{
+			ID:     "git-branch-delete",
+			Tool:   "git",
+			Action: "branch",
+			Args: map[string]any{
+				"args": []any{"branch", "-D", "main"},
+			},
+		},
+	}
+
+	for _, call := range calls {
+		result, err := mediator.Execute(context.Background(), call, func(context.Context, map[string]any) (string, error) {
+			t.Fatalf("handler should not run for unsafe git call %+v", call)
+			return "", nil
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if !strings.Contains(strings.ToLower(result), "denied") {
+			t.Fatalf("expected denied result for %+v, got %q", call, result)
+		}
+	}
+}
+
 func newFixtureMediator(t *testing.T) *Mediator {
 	t.Helper()
 

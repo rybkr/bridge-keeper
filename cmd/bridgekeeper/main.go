@@ -415,6 +415,42 @@ func ollamaGitAction(args map[string]any) string {
 	return subCommand
 }
 
+func requiredStringArg(args map[string]any, key string) (string, bool) {
+	raw, ok := args[key]
+	if !ok {
+		return "", false
+	}
+	value, ok := raw.(string)
+	value = strings.TrimSpace(value)
+	return value, ok && value != ""
+}
+
+func optionalStringArg(args map[string]any, key string) string {
+	value, _ := requiredStringArg(args, key)
+	return value
+}
+
+func packageToolProperties() map[string]runtime.ToolProperty {
+	return map[string]runtime.ToolProperty{
+		"manager": {
+			Type:       "string",
+			Descrption: "The package manager to use: go or cargo. If omitted, Bridgekeeper detects go.mod or Cargo.toml.",
+		},
+		"package": {
+			Type:       "string",
+			Descrption: "The package, module, or crate name.",
+		},
+		"version": {
+			Type:       "string",
+			Descrption: "Optional version for dependency installation.",
+		},
+		"path": {
+			Type:       "string",
+			Descrption: "The project directory. Defaults to the workspace root.",
+		},
+	}
+}
+
 func ollamaToolchain(registry *tools.Registry) []runtime.ToolDef {
 	lastPath := registry.WorkspaceRoot
 
@@ -536,6 +572,135 @@ func ollamaToolchain(registry *tools.Registry) []runtime.ToolDef {
 					return "Error: url argument is invalid or empty.", nil
 				}
 				return registry.HTTPGet(ctx, tools.HTTPGetArgs{URL: urlStr})
+			},
+		},
+		{
+			Name:        "http_post",
+			Tool:        "http",
+			Action:      "post",
+			Description: "Sends a bounded HTTP POST request to an HTTP or HTTPS URL.",
+			Parameters: map[string]runtime.ToolProperty{
+				"url": {
+					Type:       "string",
+					Descrption: "The HTTP or HTTPS URL to send the request to.",
+				},
+				"body": {
+					Type:       "string",
+					Descrption: "The request body to send.",
+				},
+				"content_type": {
+					Type:       "string",
+					Descrption: "The request content type. Defaults to application/json.",
+				},
+			},
+			Required: []string{"url", "body"},
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				urlStr, ok := requiredStringArg(args, "url")
+				if !ok {
+					return "Error: url argument is invalid or empty.", nil
+				}
+				bodyStr, ok := requiredStringArg(args, "body")
+				if !ok {
+					return "Error: body argument is invalid or empty.", nil
+				}
+				return registry.HTTPPost(ctx, tools.HTTPPostArgs{
+					URL:         urlStr,
+					Body:        bodyStr,
+					ContentType: optionalStringArg(args, "content_type"),
+				})
+			},
+		},
+		{
+			Name:        "shell_exec",
+			Tool:        "shell",
+			Action:      "exec",
+			Description: "Runs a simple allowlisted local command without shell metacharacters.",
+			Parameters: map[string]runtime.ToolProperty{
+				"command": {
+					Type:       "string",
+					Descrption: "The exact command to run, for example 'ls .' or 'wc README.md'.",
+				},
+				"path": {
+					Type:       "string",
+					Descrption: "The workspace directory to run the command in.",
+				},
+			},
+			Required: []string{"command"},
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				command, ok := requiredStringArg(args, "command")
+				if !ok {
+					return "Error: command argument is invalid or empty.", nil
+				}
+				return registry.ExecuteShellCommand(ctx, tools.ShellExecArgs{
+					Command: command,
+					Path:    optionalStringArg(args, "path"),
+				})
+			},
+		},
+		{
+			Name:        "pkg_list",
+			Tool:        "pkg",
+			Action:      "list",
+			Description: "Lists dependencies for a Go module or Cargo project.",
+			Parameters:  packageToolProperties(),
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				return registry.PackageList(ctx, tools.PackageListArgs{
+					Manager: optionalStringArg(args, "manager"),
+					Path:    optionalStringArg(args, "path"),
+				})
+			},
+		},
+		{
+			Name:        "pkg_query",
+			Tool:        "pkg",
+			Action:      "query",
+			Description: "Queries available versions or registry information for a package.",
+			Parameters:  packageToolProperties(),
+			Required:    []string{"package"},
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				pkg, ok := requiredStringArg(args, "package")
+				if !ok {
+					return "Error: package argument is invalid or empty.", nil
+				}
+				return registry.PackageQuery(ctx, tools.PackageQueryArgs{
+					Manager: optionalStringArg(args, "manager"),
+					Package: pkg,
+					Path:    optionalStringArg(args, "path"),
+				})
+			},
+		},
+		{
+			Name:        "pkg_install",
+			Tool:        "pkg",
+			Action:      "install",
+			Description: "Adds or updates a dependency in a Go module or Cargo project.",
+			Parameters:  packageToolProperties(),
+			Required:    []string{"package"},
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				pkg, ok := requiredStringArg(args, "package")
+				if !ok {
+					return "Error: package argument is invalid or empty.", nil
+				}
+				return registry.PackageInstall(ctx, tools.PackageInstallArgs{
+					Manager: optionalStringArg(args, "manager"),
+					Package: pkg,
+					Version: optionalStringArg(args, "version"),
+					Path:    optionalStringArg(args, "path"),
+				})
+			},
+		},
+		{
+			Name:        "pkg_update",
+			Tool:        "pkg",
+			Action:      "update",
+			Description: "Updates dependencies in a Go module or Cargo project.",
+			Parameters:  packageToolProperties(),
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
+				return registry.PackageUpdate(ctx, tools.PackageUpdateArgs{
+					Manager: optionalStringArg(args, "manager"),
+					Package: optionalStringArg(args, "package"),
+					Path:    optionalStringArg(args, "path"),
+				})
 			},
 		},
 		{

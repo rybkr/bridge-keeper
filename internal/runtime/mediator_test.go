@@ -137,3 +137,72 @@ func TestMediatorExecute_RedactsSensitiveOutput(t *testing.T) {
 		t.Fatalf("expected secret to be redacted, got %q", result)
 	}
 }
+
+func TestMediatorExecute_AuditRequirementRequiresLogger(t *testing.T) {
+	pf := &policy.PolicyFile{
+		Default: "deny",
+		Capabilities: []policy.Capability{
+			{
+				Name:     "audited",
+				Tool:     "fs",
+				Actions:  []string{"read_file"},
+				Decision: "allow",
+				Audit:    &types.AuditRequirement{Required: true, Level: "info"},
+			},
+		},
+	}
+
+	mediator := &Mediator{
+		Policy: policy.NewEngine(pf),
+	}
+
+	result, err := mediator.Execute(context.Background(), types.ToolCall{
+		ID:     "5",
+		Tool:   "fs",
+		Action: "read_file",
+	}, func(context.Context, map[string]any) (string, error) {
+		t.Fatal("handler should not run without required audit logger")
+		return "", nil
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(result, "audit required by policy") {
+		t.Fatalf("unexpected result %q", result)
+	}
+}
+
+func TestMediatorExecute_UsesConfiguredPolicySubject(t *testing.T) {
+	pf := &policy.PolicyFile{
+		Default: "deny",
+		Capabilities: []policy.Capability{
+			{
+				Name:     "developer-read",
+				Tool:     "fs",
+				Actions:  []string{"read_file"},
+				Decision: "allow",
+				Scope:    &policy.Scope{Roles: []string{"developer"}},
+			},
+		},
+	}
+
+	mediator := &Mediator{
+		Policy:  policy.NewEngine(pf),
+		Audit:   audit.NewLogger(&bytes.Buffer{}, audit.Info),
+		Subject: types.PolicySubject{Role: "developer", SessionID: "s-1"},
+	}
+
+	result, err := mediator.Execute(context.Background(), types.ToolCall{
+		ID:     "6",
+		Tool:   "fs",
+		Action: "read_file",
+	}, func(context.Context, map[string]any) (string, error) {
+		return "ok", nil
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result != "ok" {
+		t.Fatalf("result = %q, want ok", result)
+	}
+}

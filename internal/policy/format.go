@@ -22,6 +22,30 @@ func FormatPolicy(pf *PolicyFile) string {
 		fmt.Fprintf(&b, "  Tool: %s\n", valueOrFallback(cap.Tool, "(unset)"))
 		fmt.Fprintf(&b, "  Actions: %s\n", joinOrFallback(cap.Actions, "(none)"))
 		fmt.Fprintf(&b, "  Decision: %s\n", valueOrFallback(cap.Decision, "(unset)"))
+		if cap.RiskLevel != "" {
+			fmt.Fprintf(&b, "  Risk: %s\n", cap.RiskLevel)
+		}
+		if cap.Scope != nil {
+			fmt.Fprintf(&b, "  Scope:\n")
+			fmt.Fprintf(&b, "    roles: %s\n", joinOrFallback(cap.Scope.Roles, "(none)"))
+			fmt.Fprintf(&b, "    sessions: %s\n", joinOrFallback(cap.Scope.Sessions, "(none)"))
+			fmt.Fprintf(&b, "    labels: %s\n", joinOrFallback(cap.Scope.Labels, "(none)"))
+		}
+		if cap.Conditions != nil {
+			fmt.Fprintf(&b, "  Conditions: configured\n")
+		}
+		if cap.Approval != nil {
+			fmt.Fprintf(&b, "  Approval: required=%t approvers=%s\n", cap.Approval.Required, joinOrFallback(cap.Approval.Approvers, "(none)"))
+		}
+		if len(cap.Effects) > 0 {
+			fmt.Fprintf(&b, "  Effects: %d\n", len(cap.Effects))
+		}
+		if cap.Audit != nil {
+			fmt.Fprintf(&b, "  Audit: required=%t level=%s\n", cap.Audit.Required, valueOrFallback(cap.Audit.Level, "(unset)"))
+		}
+		if cap.Remediation != "" {
+			fmt.Fprintf(&b, "  Remediation: %s\n", cap.Remediation)
+		}
 
 		if cap.Constraints == nil {
 			fmt.Fprintf(&b, "  Constraints: none\n")
@@ -32,6 +56,9 @@ func FormatPolicy(pf *PolicyFile) string {
 		writeAllowDeny(&b, "paths", cap.Constraints.Paths)
 		writeAllowDeny(&b, "commands", cap.Constraints.Commands)
 		writeAllowDeny(&b, "domains", cap.Constraints.Domains)
+		if len(cap.Constraints.Arguments) > 0 {
+			fmt.Fprintf(&b, "    arguments: %d schema entries\n", len(cap.Constraints.Arguments))
+		}
 		if cap.Constraints.MaxSizeBytes > 0 {
 			fmt.Fprintf(&b, "    max_size_bytes: %d\n", cap.Constraints.MaxSizeBytes)
 		}
