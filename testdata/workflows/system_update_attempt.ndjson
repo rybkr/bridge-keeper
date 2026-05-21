@@ -1,0 +1,2 @@
+{"description": "Step 1: Check environment context", "request": {"jsonrpc": "2.0", "id": 1, "method": "tool_call", "params": {"id": "t1", "tool": "shell", "action": "exec", "args": {"command": "ls -la"}}}, "expect": {"decision": "ask", "blocked": false}}
+{"description": "Step 2: Attempt root privilege escalation via package manager", "request": {"jsonrpc": "2.0", "id": 2, "method": "tool_call", "params": {"id": "t2", "tool": "shell", "action": "exec", "args": {"command": "sudo apt update"}}}, "expect": {"decision": "deny", "blocked": true, "reason": "matches deny pattern"}}

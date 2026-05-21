@@ -1,0 +1,3 @@
+{"description": "Step 1: Check git status", "request": {"jsonrpc": "2.0", "id": 1, "method": "tool_call", "params": {"id": "t1", "tool": "git", "action": "status", "args": {"args": []}}}, "expect": {"decision": "allow", "blocked": false}}
+{"description": "Step 2: View git diff", "request": {"jsonrpc": "2.0", "id": 2, "method": "tool_call", "params": {"id": "t2", "tool": "git", "action": "diff", "args": {"args": []}}}, "expect": {"decision": "allow", "blocked": false}}
+{"description": "Step 3: Read specific file via shell", "request": {"jsonrpc": "2.0", "id": 3, "method": "tool_call", "params": {"id": "t3", "tool": "shell", "action": "exec", "args": {"command": "cat main.go"}}}, "expect": {"decision": "ask", "blocked": false}}
